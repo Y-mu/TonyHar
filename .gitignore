@@ -30,6 +30,7 @@ htmlcov/
 # Local model cache and vector database
 .hf-cache/
 my_vector_db/
+chroma_db/
 
 # Editor and operating-system files
 .vscode/

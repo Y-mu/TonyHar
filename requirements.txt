@@ -1,3 +1,4 @@
 chromadb
 sentence-transformers
 torch
+tiktoken
