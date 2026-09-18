@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
-from typing import Union
+from typing import Any, Union
+# 统一管理跨平台设备、模型和 Chroma 客户端配置
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MODEL_CACHE = PROJECT_ROOT / ".hf-cache"
@@ -45,3 +46,16 @@ def create_client(database_path: Union[str, Path]):
     if not database_path.is_absolute():
         database_path = PROJECT_ROOT / database_path
     return chromadb.PersistentClient(path=str(database_path))
+
+
+def get_collection() -> Any:
+    """获取 demo 使用的 Chroma Collection。
+
+    数据库路径、Collection 名称、embedding 模型和距离空间都在本模块统一管理。
+    """
+    client = create_client(DATABASE_NAME)
+    return client.get_or_create_collection(
+        name=COLLECTION_NAME,
+        embedding_function=create_embedding_function(),
+        metadata={"hnsw:space": "cosine"},
+    )

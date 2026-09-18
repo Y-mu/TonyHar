@@ -1,13 +1,8 @@
 from typing import Any, Dict, List, Optional
 
-from chroma_config import (
-    COLLECTION_NAME,
-    DATABASE_NAME,
-    create_client,
-    create_embedding_function,
-)
+from chroma_config import get_collection
 from chunking import chunk_text
-
+# 提取向量并写入 ChromaDB
 
 def index_documents(
     documents: List[str],
@@ -45,15 +40,19 @@ def index_documents(
     if not chunks:
         return 0
 
-    client = create_client(DATABASE_NAME)
-    collection = client.get_or_create_collection(
-        name=COLLECTION_NAME,
-        embedding_function=create_embedding_function(),
-        metadata={"hnsw:space": "cosine"},
-    )
+    collection = get_collection()
     collection.upsert(
         ids=chunk_ids,
         documents=chunks,
         metadatas=chunk_metadatas,
     )
     return len(chunks)
+
+
+def insert_documents(documents: List[str]) -> int:
+    """Demo 级便捷入口：为文档补充基础元数据后建立索引。"""
+    metadatas = [
+        {"source": "tutorial", "document_number": index}
+        for index in range(len(documents))
+    ]
+    return index_documents(documents, metadatas)

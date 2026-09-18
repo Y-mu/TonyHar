@@ -1,6 +1,7 @@
 from typing import List
 
 import tiktoken
+# 将文本按 token 分块
 
 
 def chunk_text(
