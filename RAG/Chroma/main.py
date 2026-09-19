@@ -1,57 +1,82 @@
-from index_documents import insert_documents
-from search import search
+"""Parser + ChunkService + Chroma 的最小可执行示例。
 
-# 原始文档
-#   ↓
-# 文本分块 Chunking
-#   ↓
-# Embedding  BAAI/bge-small-zh-v1.5 模型转成向量
-#   ↓
-# 写入 Chroma
-#   ↓
-# 用户问题转成向量
-#   ↓
-# 相似度搜索
-#   ↓
-# 返回相关文本
-#   ↓
-# 交给大模型生成答案
+运行：
+    python -m RAG.Chroma.main ./manual.pdf --document-id manual-v1
+"""
+
+import argparse
+import asyncio
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+from RAG.Chroma.DocumentIndexer import DocumentIndexer
+from RAG.Chroma.chunk_service import ChunkService
 
 
-def search_and_print_results(q: str) -> None:
-    query = "推荐给罗家馨什么好" 
-    query = q
-    results = search(query)
-    print(f"\n查询：{query}")
-    print("-" * 50)
+@dataclass
+class RecordingContext:
+    records: Dict[str, Any] = field(default_factory=dict)
 
-    for index, (document, distance) in enumerate(
-        zip(results["documents"][0], results["distances"][0]),
-        start=1,
-    ):
-        print(f"第 {index} 名（相似度 {1 - distance:.4f}）：")
-        print(f"  {document}\n")
-        
-        
+    def record(self, key: str, value: Any) -> None:
+        self.records[key] = value
+
+
+@dataclass
+class DemoTaskContext:
+    filename: str
+    size: int
+    document_id: str
+    parser_id: str = "auto"
+    language: str = "Chinese"
+    parser_config: Dict[str, Any] = field(default_factory=dict)
+    tenant_id: Optional[str] = None
+    from_page: int = 0
+    to_page: Optional[int] = None
+    recording_context: RecordingContext = field(default_factory=RecordingContext)
+
+    def progress_cb(self, prog: Any = None, msg: str = "") -> None:
+        if msg:
+            print(f"[Parser] {msg}")
+
+
+async def index_file(path: Path, document_id: str, parser_id: str = "auto") -> int:
+    binary = path.read_bytes()
+    context = DemoTaskContext(
+        filename=path.name,
+        size=len(binary),
+        document_id=document_id,
+        parser_id=parser_id,
+    )
+
+    chunk_service = ChunkService(context)
+    chunks = await chunk_service.build_chunks(binary)
+    print(f"解析完成：{len(chunks)} 个 Chunk")
+
+    indexer = DocumentIndexer()
+    count = indexer.index_chunks(chunks)
+    print(f"索引完成：写入 {count} 个 Chunk")
+    return count
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Parse, chunk, and index a file into Chroma")
+    parser.add_argument("file", type=Path, help="待索引文件：pdf/docx/xlsx/txt/html 等")
+    parser.add_argument("--document-id", help="文档 ID；默认使用文件名（不含扩展名）")
+    parser.add_argument("--parser-id", default="auto", choices=["auto", "txt", "one"], help="解析策略")
+    return parser.parse_args()
+
+
 def main() -> None:
-    # documents = [
-    #     '杨涛滔 搜索了六味地黄丸', #[2,3]
-    #     '罗家馨 跟杨涛滔的地理位置高度重叠',#[2,4]
-    #     '我高中都在玩游戏',#[1,-3]
-    # ]
-    # try:
-    #     chunk_count = insert_documents(documents)
-    #     print(f"已索引 {chunk_count} 个文本块")
-    # except Exception as error:
-    #     print(f"索引文档时出错: {error}")
-    #     return
-    
-    
-    search_and_print_results("推荐给罗家馨什么好")
+    args = parse_args()
+    if not args.file.is_file():
+        raise SystemExit(f"文件不存在：{args.file}")
 
-
-
-
+    document_id = args.document_id or args.file.stem
+    try:
+        asyncio.run(index_file(args.file, document_id, args.parser_id))
+    except Exception as error:
+        raise SystemExit(f"索引失败：{error}") from error
 
 
 if __name__ == "__main__":
