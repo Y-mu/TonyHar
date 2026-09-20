@@ -10,8 +10,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from RAG.Chroma.DocumentIndexer import DocumentIndexer
-from RAG.Chroma.chunk_service import ChunkService
+from .DocumentIndexer import DocumentIndexer
+from .TaskHandler import TaskHandler
+from .chunk_service import ChunkService
+from .store.chroma_vector_store import ChromaVectorStore
 
 
 @dataclass
@@ -49,14 +51,16 @@ async def index_file(path: Path, document_id: str, parser_id: str = "auto") -> i
         parser_id=parser_id,
     )
 
+    vector_store = ChromaVectorStore()
+    indexer = DocumentIndexer(vector_store=vector_store)
     chunk_service = ChunkService(context)
-    chunks = await chunk_service.build_chunks(binary)
-    print(f"解析完成：{len(chunks)} 个 Chunk")
-
-    indexer = DocumentIndexer()
-    count = indexer.index_chunks(chunks)
-    print(f"索引完成：写入 {count} 个 Chunk")
-    return count
+    handler = TaskHandler(context, chunk_service, indexer)
+    result = await handler.handle_task(binary)
+    print(
+        f"处理完成：生成 {result.chunk_count} 个 Chunk，"
+        f"写入 {result.indexed_count} 个，耗时 {result.elapsed_seconds:.2f}s"
+    )
+    return result.indexed_count
 
 
 def parse_args() -> argparse.Namespace:

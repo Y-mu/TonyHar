@@ -1,14 +1,8 @@
-import json
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Optional, Sequence
+from typing import Optional, Sequence
 
-try:
-    from .chroma_config import get_collection
-except ImportError:
-    from chroma_config import get_collection
-from RAG.Chroma.model.Chunk import Chunk
-
-Metadata = Dict[str, Any]
+from .model.Chunk import Chunk
+from .store.vector_store import VectorStore
 
 
 @dataclass(frozen=True)
@@ -25,52 +19,33 @@ class IndexConfig:
 class DocumentIndexer:
     """将 Chunk 流水线记录批量写入 Chroma。"""
 
-    def __init__(self, config: Optional[IndexConfig] = None, collection_factory: Callable[[], Any] = get_collection) -> None:
+    def __init__(
+        self,
+        vector_store: VectorStore,
+        config: Optional[IndexConfig] = None,
+    ) -> None:
+        self._vector_store = vector_store
         self.config = config or IndexConfig()
-        self._collection_factory = collection_factory
-        self._collection: Optional[Any] = None
 
-    @property
-    def collection(self) -> Any:
-        if self._collection is None:
-            self._collection = self._collection_factory()
-        return self._collection
 
     def index_chunks(self, chunks: Sequence[Chunk]) -> int:
         """主索引入口：校验并批量 upsert Chunk。"""
         self._validate_chunks(chunks)
         total = 0
+
         for start in range(0, len(chunks), self.config.batch_size):
             batch = chunks[start : start + self.config.batch_size]
-            self.collection.upsert(
-                ids=[chunk.id for chunk in batch],
-                documents=[chunk.text for chunk in batch],
-                metadatas=[self._metadata_for(chunk) for chunk in batch],
-            )
-            total += len(batch)
+
+            written_count = self._vector_store.upsert(batch)
+            total += written_count
+
         return total
 
-    def delete_document(self, document_id: str) -> None:
+    def delete_document(self, document_id: str) -> int:
         """删除文档的全部 Chunk，重建索引前可调用。"""
         if not document_id.strip():
             raise ValueError("document_id must not be empty")
-        self.collection.delete(where={"document_id": document_id})
-
-    @staticmethod
-    def _metadata_for(chunk: Chunk) -> Metadata:
-        metadata = dict(chunk.metadata)
-        metadata.update({
-            "document_id": chunk.document_id,
-            "filename": chunk.filename,
-            "chunk_index": chunk.chunk_index,
-        })
-        if chunk.title:
-            metadata.setdefault("title", chunk.title)
-        if chunk.page is not None:
-            metadata.setdefault("page", chunk.page)
-        if chunk.position is not None:
-            metadata.setdefault("position", json.dumps(chunk.position, ensure_ascii=False))
-        return metadata
+        return self._vector_store.delete_document(document_id)
 
     @staticmethod
     def _validate_chunks(chunks: Sequence[Chunk]) -> None:

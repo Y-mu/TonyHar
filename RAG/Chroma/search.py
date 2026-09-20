@@ -1,6 +1,6 @@
 from typing import Any, Dict
 
-from chroma_config import get_collection
+from RAG.Chroma.store.chroma_config import get_collection
 # 查询已建立的向量索引
 
 
