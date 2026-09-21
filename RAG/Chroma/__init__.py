@@ -1,1 +1,0 @@
-"""Chroma-based RAG pipeline."""

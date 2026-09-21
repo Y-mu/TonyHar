@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
-from .model.Chunk import Chunk
-from .store.vector_store import VectorStore
+from ..model.Chunk import Chunk
+from ..store.vector_store import VectorStore
 
 
 @dataclass(frozen=True)

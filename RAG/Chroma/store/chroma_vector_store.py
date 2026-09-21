@@ -1,6 +1,8 @@
 import json
 from typing import Any, Callable, Optional, Sequence
 
+from RAG.Chroma.model.SearchResult import SearchResult
+
 from ..model.Chunk import Chunk
 from .chroma_config import get_collection
 from .vector_store import VectorStore
@@ -47,7 +49,49 @@ class ChromaVectorStore(VectorStore):
 
         self.collection.delete(ids=chunk_ids)
         return len(chunk_ids)
+    def search(self,
+               query: str,
+               top_k: int,
+               filters: Optional[dict] = None,
+               ) -> list[SearchResult]:
+        result = self.collection.query(
+            query_texts=[query],
+            n_results=top_k,
+            where=filters,
+            include=["metadatas", "documents", "distances"],
             
+        )
+
+        ids = result.get("ids", [[]])[0]
+        metadatas = result.get("metadatas", [[]])[0]
+        documents = result.get("documents", [[]])[0]
+        distances = result.get("distances", [[]])[0]
+
+        search_results = []
+
+        for chunk_id, text, distance, metadata in zip(
+            ids,
+            documents,
+            distances,
+            metadatas,
+        ):
+            distance = float(distance)
+
+            search_results.append(
+                SearchResult(
+                    chunk_id=chunk_id,
+                    document_id=str(
+                        (metadata or {}).get("document_id", "")
+                    ),
+                    text=text or "",
+                    distance=distance,
+                    score=max(0.0, 1.0 - distance),
+                    metadata=metadata or {},
+                )
+            )
+        return search_results
+
+
     @staticmethod
     def _build_metadata(chunk: Chunk) -> dict[str, Any]:
         metadata = dict(chunk.metadata)

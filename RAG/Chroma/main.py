@@ -6,56 +6,34 @@
 
 import argparse
 import asyncio
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
 
-from .DocumentIndexer import DocumentIndexer
-from .TaskHandler import TaskHandler
-from .chunk_service import ChunkService
+from .svr.DocumentIndexer import DocumentIndexer
+from .svr.TaskHandler import TaskHandler
+from .svr.chunk_service import ChunkService
 from .store.chroma_vector_store import ChromaVectorStore
+from .model import IngestionConfig, RAGContext
 
 
-@dataclass
-class RecordingContext:
-    records: Dict[str, Any] = field(default_factory=dict)
-
-    def record(self, key: str, value: Any) -> None:
-        self.records[key] = value
-
-
-@dataclass
-class DemoTaskContext:
-    filename: str
-    size: int
-    document_id: str
-    parser_id: str = "auto"
-    language: str = "Chinese"
-    parser_config: Dict[str, Any] = field(default_factory=dict)
-    tenant_id: Optional[str] = None
-    from_page: int = 0
-    to_page: Optional[int] = None
-    recording_context: RecordingContext = field(default_factory=RecordingContext)
-
-    def progress_cb(self, prog: Any = None, msg: str = "") -> None:
-        if msg:
-            print(f"[Parser] {msg}")
 
 
 async def index_file(path: Path, document_id: str, parser_id: str = "auto") -> int:
     binary = path.read_bytes()
-    context = DemoTaskContext(
+    context = RAGContext(
         filename=path.name,
         size=len(binary),
         document_id=document_id,
-        parser_id=parser_id,
+        ingestion=IngestionConfig(parser_id=parser_id),
     )
 
     vector_store = ChromaVectorStore()
     indexer = DocumentIndexer(vector_store=vector_store)
     chunk_service = ChunkService(context)
     handler = TaskHandler(context, chunk_service, indexer)
-    result = await handler.handle_task(binary)
+    result = await handler.handle_task(
+        binary,
+        replace_existing=context.ingestion.replace_existing,
+    )
     print(
         f"处理完成：生成 {result.chunk_count} 个 Chunk，"
         f"写入 {result.indexed_count} 个，耗时 {result.elapsed_seconds:.2f}s"

@@ -16,3 +16,8 @@ class VectorStore(ABC):
     def delete_document(self, document_id: str) -> int:
         """删除一个文档对应的所有 Chunk。"""
         raise NotImplementedError
+
+    @abstractmethod
+    def search(self, query: str, top_k: int) -> Sequence[Chunk]:
+        """搜索与 query 相关的 top_k 个 Chunk。"""
+        raise NotImplementedError
