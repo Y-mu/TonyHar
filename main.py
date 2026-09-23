@@ -95,7 +95,6 @@ def build_agent() -> Agent:
         ),
     )
 
-
 async def main() -> None:
     agent = build_agent()
     file_rule = FileIngestionRule()

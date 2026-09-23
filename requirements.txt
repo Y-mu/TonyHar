@@ -3,3 +3,4 @@ sentence-transformers
 torch
 tiktoken
 openai
+semantic-router

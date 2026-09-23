@@ -2,17 +2,28 @@ import json
 from .llm import BaseLLM
 from .tool import ToolRegistry
 from .memory import Memory
+from .semantic_router import SemanticIntentRouter
 
 class Agent:
-    def __init__(self, llm: BaseLLM, tools: ToolRegistry, system_prompt: str = ""):
+    def __init__(self, llm: BaseLLM, tools: ToolRegistry, system_prompt: str = "", semantic_router=None):
         self.llm = llm
         self.tools = tools
         self.memory = Memory()
         if system_prompt:
             self.memory.add("system", system_prompt)
         self.max_steps = 10
+        self.semantic_router = semantic_router or SemanticIntentRouter()
 
     async def run(self, user_input: str) -> str:
+        # 路由属于 Agent 的输入处理层，不由 main.py 决定分支。
+        route = self.semantic_router.classify(user_input)
+        confidence = (
+            f", confidence={route.score:.3f}"
+            if route.score is not None else ""
+        )
+        user_input = f"{user_input}\n\n[语义路由: {route.name}{confidence}]"
+        if route.name == "knowledge_query":
+            user_input += "\n请优先考虑从已入库的知识内容回答。"
         self.memory.add("user", user_input)
 
         step_total = 0
