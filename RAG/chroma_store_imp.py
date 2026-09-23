@@ -1,4 +1,10 @@
 """面向对象的 Chroma 基础设施适配层。"""
+from core.model_config import (
+    DEFAULT_EMBEDDING_MODEL_CONFIG,
+    EmbeddingModelConfig,
+    PROJECT_ROOT,
+)
+
 import os
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -9,14 +15,8 @@ from chromadb.utils import embedding_functions
 
 from .vector_store_base import Chunk, VectorStore
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-MODEL_CACHE = PROJECT_ROOT / ".hf-cache"
-DEFAULT_MODEL_NAME = "BAAI/bge-small-zh-v1.5"
 DEFAULT_DATABASE_NAME = "my_vector_db"
 DEFAULT_COLLECTION_NAME = "my_documents"
-os.environ.setdefault("HF_HOME", str(MODEL_CACHE))
-# MPS 不支持的算子自动回退到 CPU，避免 embedding 运行时直接失败。
-os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 
 class ChromaStoreImp(VectorStore):
@@ -24,13 +24,18 @@ class ChromaStoreImp(VectorStore):
 
     def __init__(self, database_name: str | Path = DEFAULT_DATABASE_NAME,
                  collection_name: str = DEFAULT_COLLECTION_NAME,
-                 model_name: str = DEFAULT_MODEL_NAME,
+                 model_config: EmbeddingModelConfig = DEFAULT_EMBEDDING_MODEL_CONFIG,
                  device: str | None = None):
         self.database_name = database_name
         self.collection_name = collection_name
-        self.model_name = model_name
+        self.model_config = model_config
+        self.model_name = model_config.model_name
         # 可通过 device 参数或 RAG_DEVICE 环境变量手动指定设备。
-        self.device = device or os.getenv("RAG_DEVICE") or self._get_device()
+        self.device = (
+            device
+            or os.getenv(model_config.device_env_var)
+            or self._get_device()
+        )
         self.client = self._create_client()
         self.embedding_function = self._create_embedding_function()
         self._collection: Any | None = None
@@ -54,23 +59,6 @@ class ChromaStoreImp(VectorStore):
             "mps_available": torch.backends.mps.is_available(),
         }
 
-    def _find_cached_model(self) -> str | None:
-        model_dir = MODEL_CACHE / "hub" / f"models--{self.model_name.replace('/', '--')}"
-        snapshots = model_dir / "snapshots"
-        candidates = []
-        refs = model_dir / "refs" / "main"
-        if refs.is_file():
-            revision = refs.read_text(encoding="utf-8").strip()
-            if revision:
-                candidates.append(snapshots / revision)
-        if snapshots.is_dir():
-            candidates.extend(path for path in snapshots.iterdir() if path.is_dir())
-        required = ("config.json", "modules.json", "model.safetensors")
-        for path in candidates:
-            if all((path / name).is_file() for name in required):
-                return str(path.resolve())
-        return None
-
     def _create_client(self):
         path = Path(self.database_name)
         if not path.is_absolute():
@@ -79,8 +67,7 @@ class ChromaStoreImp(VectorStore):
         return chromadb.PersistentClient(path=str(path))
 
     def _create_embedding_function(self):
-        cached = self._find_cached_model()
-        source = cached or self.model_name
+        source = self.model_config.model_source
         print(f"嵌入模型: {self.model_name} (device={self.device})")
         if self.device == "cpu":
             diagnostics = self.device_diagnostics()
