@@ -7,7 +7,7 @@ from core.parser import TxtParser
 from rag.document_service import DocumentService
 from rag.pipeline_context import PipelineContext
 from rag.scheduler import DocumentScheduler
-from rag.splitter import SplitterConfig, TokenSplitter
+from rag.splitter import HybridSplitter, SplitterConfig
 from rag.vector_store_base import Chunk, VectorStore
 
 
@@ -36,6 +36,23 @@ class MemoryVectorStore(VectorStore):
 
 
 class ManualIngestionTest(unittest.TestCase):
+    def test_normalize_metadata_removes_empty_values(self):
+        result = DocumentService.normalize_metadata({
+            "none": None,
+            "empty_string": "",
+            "empty_list": [],
+            "empty_dict": {},
+            "zero": 0,
+            "false": False,
+            "value": ["heading"],
+        })
+
+        self.assertEqual(result, {
+            "zero": 0,
+            "false": False,
+            "value": ["heading"],
+        })
+
     def test_manual_txt_is_parsed_and_stored(self):
         manual_path = Path(__file__).resolve().parents[1] / "manual.txt"
         self.assertTrue(manual_path.is_file())
@@ -43,8 +60,8 @@ class ManualIngestionTest(unittest.TestCase):
         store = MemoryVectorStore()
         scheduler = DocumentScheduler(
             parser=TxtParser(),
-            splitter=TokenSplitter(
-                SplitterConfig(chunk_size=128, chunk_overlap=16)
+            splitter=HybridSplitter(
+                config=SplitterConfig(chunk_size=128, chunk_overlap=16)
             ),
             document_service=DocumentService(store),
         )

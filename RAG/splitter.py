@@ -1,87 +1,112 @@
-"""文档切分器。"""
+"""可插拔、可组合的文档切块策略。"""
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import re
-
+from typing import Any, Sequence
 from core.parser import RawDocument
 from .vector_store_base import Chunk
-
 
 @dataclass(frozen=True)
 class SplitterConfig:
     chunk_size: int = 512
     chunk_overlap: int = 64
 
+@dataclass(frozen=True)
+class ChunkCandidate:
+    text: str
+    chunk_type: str = "text"
+    heading_path: tuple[str, ...] = ()
+    char_start: int | None = None
+    char_end: int | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 class TextSplitter(ABC):
     @abstractmethod
-    def split(self, doc: RawDocument) -> list[Chunk]:
-        raise NotImplementedError
+    def split(self, doc: RawDocument) -> list[Chunk]: ...
+
+class ChunkingStrategy(ABC):
+    name = "strategy"
+    @abstractmethod
+    def supports(self, doc: RawDocument) -> bool: ...
+    @abstractmethod
+    def split_candidates(self, doc: RawDocument) -> Sequence[ChunkCandidate]: ...
+
+def _tokenize(text: str) -> list[str]:
+    return re.findall(r"[\u4e00-\u9fff]|[A-Za-z]+(?:['-][A-Za-z]+)*|\d+(?:\.\d+)?|[^\w\s]", text)
 
 
-class TokenSplitter(TextSplitter):
-    """按中英文 token 近似切分文本，并保留窗口重叠。"""
+def _join_tokens(tokens: list[str]) -> str:
+    result = ""
+    for token in tokens:
+        if result and re.match(r"^[A-Za-z0-9]", token) and re.search(r"[A-Za-z0-9]$", result): result += " "
+        result += token
+    return result
 
-    def __init__(self, config: SplitterConfig | None = None):
-        self.config = config or SplitterConfig()
-        if self.config.chunk_size <= 0:
-            raise ValueError("chunk_size 必须大于 0")
-        if not 0 <= self.config.chunk_overlap < self.config.chunk_size:
-            raise ValueError("chunk_overlap 必须在 [0, chunk_size) 范围内")
+class MarkdownStrategy(ChunkingStrategy):
+    name = "markdown"
+    heading = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+    def supports(self, doc: RawDocument) -> bool: return doc.filename.lower().endswith((".md", ".markdown"))
+    def split_candidates(self, doc: RawDocument) -> Sequence[ChunkCandidate]:
+        path, blocks, buffer, start, offset, in_code = [], [], [], 0, 0, False
+        def flush(end: int, kind: str = "text"):
+            text = "".join(buffer).strip()
+            if text: blocks.append(ChunkCandidate(text, kind, tuple(path), start, end))
+            buffer.clear()
+        for line in doc.text.splitlines(True):
+            stripped = line.strip()
+            if stripped.startswith("```"):
+                if in_code: buffer.append(line); offset += len(line); flush(offset, "code"); in_code = False
+                else: flush(offset); in_code = True; start = offset; buffer.append(line); offset += len(line)
+                continue
+            if in_code: buffer.append(line); offset += len(line); continue
+            match = self.heading.match(stripped)
+            if match:
+                flush(offset); level = len(match.group(1)); del path[level - 1:]; path.append(match.group(2).strip()); offset += len(line); start = offset; continue
+            if not stripped and buffer: flush(offset); offset += len(line); start = offset
+            else:
+                if not buffer: start = offset
+                buffer.append(line); offset += len(line)
+        flush(offset)
+        return blocks
 
-    def split(self, doc: RawDocument) -> list[Chunk]:
-        if not doc or not doc.text.strip():
-            return []
-
-        tokens = self._tokenize(doc.text)
-        if not tokens:
-            return []
-
-        chunks: list[Chunk] = []
-        start = 0
-        index = 0
-
+class PlainTextStrategy(ChunkingStrategy):
+    name = "plain_text"
+    def __init__(self, config: SplitterConfig): self.config = config
+    def supports(self, doc: RawDocument) -> bool: return True
+    def split_candidates(self, doc: RawDocument) -> Sequence[ChunkCandidate]:
+        tokens = _tokenize(doc.text)
+        result, start = [], 0
         while start < len(tokens):
             end = min(start + self.config.chunk_size, len(tokens))
-            part = self._join_tokens(tokens[start:end]).strip()
-            if part:
-                raw_id = f"{doc.document_id}:{index}:{part}"
-                chunk_id = hashlib.sha1(raw_id.encode("utf-8")).hexdigest()
-                chunks.append(Chunk(
-                    id=chunk_id,
-                    document_id=doc.document_id,
-                    filename=doc.filename,
-                    text=part,
-                    chunk_index=index,
-                    metadata=dict(doc.metadata),
-                    raw={"token_start": start, "token_end": end},
-                ))
-                index += 1
-
-            if end >= len(tokens):
-                break
-
-            # 下一块从当前块尾部向前回退 overlap 个 token。
+            result.append(ChunkCandidate(_join_tokens(tokens[start:end])))
+            if end >= len(tokens): break
             start = end - self.config.chunk_overlap
+        return result
 
-        return chunks
-
-    @staticmethod
-    def _tokenize(text: str) -> list[str]:
-        """中文按字、英文按词切分；连续空白只作为分隔符。"""
-        pattern = r"[\u4e00-\u9fff]|[A-Za-z]+(?:['-][A-Za-z]+)*|\d+(?:\.\d+)?|[^\w\s]"
-        return re.findall(pattern, text)
-
-    @staticmethod
-    def _join_tokens(tokens: list[str]) -> str:
-        """拼接 token，避免英文词之间和中文字符之间出现异常空格。"""
-        result = ""
-        for token in tokens:
-            if not result:
-                result = token
-            elif re.match(r"^[A-Za-z0-9]", token) and re.search(r"[A-Za-z0-9]$", result):
-                result += " " + token
-            else:
-                result += token
+class HybridSplitter(TextSplitter):
+    """策略选择 + 候选块统一装配；Scheduler 只依赖 TextSplitter。"""
+    def __init__(self, strategies: Sequence[ChunkingStrategy] | None = None, config: SplitterConfig | None = None):
+        self.config = config or SplitterConfig(); self.strategies = list(strategies or [MarkdownStrategy(), PlainTextStrategy(self.config)])
+    def split(self, doc: RawDocument) -> list[Chunk]:
+        if not doc or not doc.text.strip(): return []
+        strategy = next(s for s in self.strategies if s.supports(doc)); result, index = [], 0
+        for candidate in strategy.split_candidates(doc):
+            tokens, start = _tokenize(candidate.text), 0
+            while start < len(tokens):
+                end = min(start + self.config.chunk_size, len(tokens)); text = _join_tokens(tokens[start:end]).strip()
+                if text:
+                    prefix = " > ".join(candidate.heading_path); content = f"[{prefix}]\n{text}" if prefix else text
+                    metadata = {
+                        **doc.metadata,
+                        **candidate.metadata,
+                        "chunk_type": candidate.chunk_type,
+                        "strategy": strategy.name,
+                    }
+                    if candidate.heading_path:
+                        metadata["heading_path"] = list(candidate.heading_path)
+                    raw = f"{doc.document_id}:{index}:{content}"
+                    result.append(Chunk(hashlib.sha1(raw.encode()).hexdigest(), doc.document_id, doc.filename, content, index, metadata=metadata, raw={"char_start": candidate.char_start, "char_end": candidate.char_end})); index += 1
+                if end >= len(tokens): break
+                start = end - self.config.chunk_overlap
         return result

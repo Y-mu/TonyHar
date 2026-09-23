@@ -11,7 +11,7 @@ from rag.chroma_store_imp import ChromaStoreImp
 from rag.document_service import DocumentService
 from rag.pipeline_context import PipelineContext
 from rag.scheduler import DocumentScheduler
-from rag.splitter import SplitterConfig, TokenSplitter
+from rag.splitter import HybridSplitter, SplitterConfig
 
 
 class FileIngestionTool(BaseTool):
@@ -45,8 +45,8 @@ class FileIngestionTool(BaseTool):
             )
             self._scheduler = DocumentScheduler(
                 parser=TxtParser(),
-                splitter=TokenSplitter(
-                    SplitterConfig(chunk_size=512, chunk_overlap=64)
+                splitter=HybridSplitter(
+                    config=SplitterConfig(chunk_size=512, chunk_overlap=64)
                 ),
                 document_service=DocumentService(store),
             )

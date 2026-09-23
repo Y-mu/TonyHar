@@ -219,7 +219,7 @@ document_service = DocumentService(store)
 
 scheduler = DocumentScheduler(
     parser=TxtParser(),
-    splitter=TokenSplitter(),
+    splitter=HybridSplitter(),
     document_service=document_service,
 )
 
@@ -269,8 +269,8 @@ Scheduler → ChromaStoreImp → Parser / Splitter
 
 ## 10. 下一步
 
-1. 为 `TxtParser`、`TokenSplitter` 和 `DocumentScheduler` 增加单元测试。
-2. 将当前按字符切分的 `TokenSplitter` 替换为真正的 tokenizer 或按语义边界切分。
+1. 为 `TxtParser`、`HybridSplitter` 和 `DocumentScheduler` 增加单元测试。
+2. 为 `HybridSplitter` 增加更多可插拔的文档块策略。
 3. 增加 PDF、Markdown 等 Parser，并统一 Parser 注册机制。
 4. 为 `DocumentScheduler` 增加可选的进度回调和可恢复错误处理。
 5. 增加 Retriever 的 metadata 过滤、距离分数和重排能力。
@@ -291,7 +291,7 @@ env3.13/bin/python main.py
   → 文件规则层（检测本地路径）
   → 读取文件
   → TxtParser
-  → TokenSplitter
+  → HybridSplitter
   → DocumentService
   → ChromaStoreImp.upsert
   → 将入库结果附加到 Agent 输入

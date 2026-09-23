@@ -13,9 +13,18 @@ class DocumentService:
         self.vector_store = vector_store
 
     @staticmethod
+    def normalize_metadata(metadata: dict) -> dict:
+        """清理向量库不接受的空 metadata 值。"""
+        return {
+            key: value
+            for key, value in metadata.items()
+            if value is not None and value != "" and value != [] and value != {}
+        }
+
+    @staticmethod
     def prepare_chunk(chunk: Chunk) -> Chunk:
         """生成入库所需的业务 metadata。"""
-        metadata = dict(chunk.metadata)
+        metadata = DocumentService.normalize_metadata(dict(chunk.metadata))
         metadata.update({
             "document_id": chunk.document_id,
             "filename": chunk.filename,
@@ -27,6 +36,8 @@ class DocumentService:
             metadata.setdefault("page", chunk.page)
         if chunk.position is not None:
             metadata.setdefault("position", str(chunk.position))
+
+        metadata = DocumentService.normalize_metadata(metadata)
 
         return Chunk(
             id=chunk.id,
