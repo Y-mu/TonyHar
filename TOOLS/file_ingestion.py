@@ -5,52 +5,20 @@ from pathlib import Path
 import re
 from typing import Any
 
-from core.parser import TxtParser
-from core.tool import BaseTool
-from rag.chroma_store_imp import ChromaStoreImp
-from rag.document_service import DocumentService
+from tooling import BaseTool, tool
+
 from rag.pipeline_context import PipelineContext
 from rag.scheduler import DocumentScheduler
-from rag.splitter import HybridSplitter, SplitterConfig
 
 
-class FileIngestionTool(BaseTool):
-    """发现用户消息中的本地文本文件，并解析、切分和入库。"""
+class FileIngestionService:
+    """发现本地文本文件，并调用文档流水线完成入库。"""
 
-    name = "file_ingestion"
-    description = "解析用户消息中引用的本地 .txt 或 .md 文件并写入知识库"
-    parameters = {
-        "type": "object",
-        "properties": {
-            "message": {
-                "type": "string",
-                "description": "包含本地文件路径的完整用户消息",
-            }
-        },
-        "required": ["message"],
-        "additionalProperties": False,
-    }
     SUPPORTED_SUFFIXES = frozenset({".txt", ".md"})
     MAX_FILES = 1_000
 
-    def __init__(self, scheduler: DocumentScheduler | None = None):
-        # 支持测试注入；生产环境仍然延迟加载 embedding 模型和 Chroma。
-        self._scheduler = scheduler
-
-    def _get_scheduler(self) -> DocumentScheduler:
-        if self._scheduler is None:
-            store = ChromaStoreImp(
-                database_name="data/chroma",
-                collection_name="documents",
-            )
-            self._scheduler = DocumentScheduler(
-                parser=TxtParser(),
-                splitter=HybridSplitter(
-                    config=SplitterConfig(chunk_size=512, chunk_overlap=64)
-                ),
-                document_service=DocumentService(store),
-            )
-        return self._scheduler
+    def __init__(self, scheduler: DocumentScheduler):
+        self.scheduler = scheduler
 
     @staticmethod
     def _candidate_sources(message: str) -> list[Path]:
@@ -98,7 +66,7 @@ class FileIngestionTool(BaseTool):
                 )
         return list(dict.fromkeys(files))
 
-    def run(self, message: str) -> dict[str, Any]:
+    def ingest(self, message: str) -> dict[str, Any]:
         """执行入库并返回适合工具调用消费的结构化结果。"""
         if not isinstance(message, str) or not message.strip():
             return {
@@ -150,7 +118,7 @@ class FileIngestionTool(BaseTool):
                     filename=path.name,
                     binary=path.read_bytes(),
                 )
-                self._get_scheduler().run(context)
+                self.scheduler.run(context)
                 files.append({
                     "filename": path.name,
                     "document_id": context.document_id,
@@ -170,3 +138,23 @@ class FileIngestionTool(BaseTool):
             "message": f"成功入库 {succeeded}/{len(files)} 个文件",
             "files": files,
         }
+
+
+def create_file_ingestion_tool(
+    scheduler: DocumentScheduler,
+) -> BaseTool:
+    """使用已装配的文档调度器创建文件入库工具。"""
+    service = FileIngestionService(scheduler)
+
+    @tool
+    def file_ingestion(message: str) -> dict[str, Any]:
+        """解析用户消息中引用的本地文本文件并写入知识库。
+
+        支持 .txt 和 .md 文件，也支持递归扫描目录。
+
+        Args:
+            message: 包含本地文件或目录路径的完整用户消息。
+        """
+        return service.ingest(message)
+
+    return file_ingestion

@@ -20,6 +20,12 @@ class Chunk:
     raw: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class DocumentSummary:
+    document_id: str
+    filename: str
+
+
 class VectorStore(ABC):
     """向量存储统一接口。"""
 
@@ -38,4 +44,8 @@ class VectorStore(ABC):
         """搜索与 query 相关的 top_k 个 Chunk。"""
         raise NotImplementedError
 
+    @abstractmethod
+    def list_documents(self) -> Sequence[DocumentSummary]:
+        """列出已经写入的文档，不返回正文。"""
+        raise NotImplementedError
 

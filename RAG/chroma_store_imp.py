@@ -13,7 +13,7 @@ import chromadb
 import torch
 from chromadb.utils import embedding_functions
 
-from .vector_store_base import Chunk, VectorStore
+from .vector_store_base import Chunk, DocumentSummary, VectorStore
 
 DEFAULT_DATABASE_NAME = "my_vector_db"
 DEFAULT_COLLECTION_NAME = "my_documents"
@@ -37,7 +37,7 @@ class ChromaStoreImp(VectorStore):
             or self._get_device()
         )
         self.client = self._create_client()
-        self.embedding_function = self._create_embedding_function()
+        self._embedding_function: Any | None = None
         self._collection: Any | None = None
 
     @staticmethod
@@ -77,6 +77,13 @@ class ChromaStoreImp(VectorStore):
             device=self.device,
             normalize_embeddings=True,
         )
+
+    @property
+    def embedding_function(self) -> Any:
+        """首次检索或入库时才加载 embedding 模型。"""
+        if self._embedding_function is None:
+            self._embedding_function = self._create_embedding_function()
+        return self._embedding_function
 
     @property
     def collection(self) -> Any:
@@ -142,3 +149,28 @@ class ChromaStoreImp(VectorStore):
                 metadata=metadata,
             ))
         return chunks
+
+    def list_documents(self) -> Sequence[DocumentSummary]:
+        """无需加载 embedding 模型即可读取现有文档目录。"""
+        try:
+            collection = self.client.get_collection(self.collection_name)
+        except Exception:
+            return []
+
+        result = collection.get(include=["metadatas"])
+        documents: dict[str, DocumentSummary] = {}
+        for metadata in result.get("metadatas") or []:
+            metadata = metadata or {}
+            document_id = str(metadata.get("document_id", ""))
+            filename = str(metadata.get("filename", ""))
+            key = document_id or filename
+            if not key:
+                continue
+            documents.setdefault(
+                key,
+                DocumentSummary(
+                    document_id=document_id,
+                    filename=filename,
+                ),
+            )
+        return sorted(documents.values(), key=lambda item: item.filename)

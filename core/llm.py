@@ -1,36 +1,24 @@
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Sequence
+from typing import List, Sequence
 from abc import ABC, abstractmethod
 import json
 from openai import OpenAI
 
-
-@dataclass(frozen=True)
-class ToolCall:
-    id: str
-    name: str
-    arguments: Dict[str, Any] = field(default_factory=dict)
-    
-    def to_openai(self) -> dict:
-        return {
-            "id": self.id,
-            "type": "function",
-            "function": {
-                "name": self.name,
-                "arguments": json.dumps(self.arguments, ensure_ascii=False),
-            },
-        }
+from tooling import ToolRequest
 
 
 @dataclass(frozen=True)
 class LLMResponse:
     content: str = ""
+    # DeepSeek thinking mode requires this value to be sent back unchanged
+    # when an assistant message contains tool calls.
+    reasoning_content: str = ""
     prompt_tokens: int = 0
     completion_tokens: int = 0
     finish_reason: str = "stop"
-    tool_calls: List[ToolCall] = field(default_factory=list)
+    tool_calls: List[ToolRequest] = field(default_factory=list)
         
-    def get_tool_calls(self) -> List[ToolCall]:
+    def get_tool_calls(self) -> List[ToolRequest]:
         return self.tool_calls
     
     def get_tool_calls_as_dicts(self) -> List[dict]:
@@ -38,6 +26,9 @@ class LLMResponse:
     
     def get_content(self) -> str:
         return self.content if self.content else ""
+
+    def get_reasoning_content(self) -> str:
+        return self.reasoning_content if self.reasoning_content else ""
 
 
 class BaseLLM(ABC):
@@ -85,8 +76,8 @@ class DeepSeekLLM(BaseLLM):
             arguments = json.loads(call.function.arguments or "{}")
 
             tool_calls.append(
-                ToolCall(
-                    id=call.id,
+                ToolRequest(
+                    tool_call_id=call.id,
                     name=call.function.name,
                     arguments=arguments,
                 )
@@ -96,6 +87,9 @@ class DeepSeekLLM(BaseLLM):
         
         return LLMResponse(
                     content=message.content or "",
+                    reasoning_content=(
+                        getattr(message, "reasoning_content", None) or ""
+                    ),
                     prompt_tokens=usage.prompt_tokens if usage else 0,
                     completion_tokens=usage.completion_tokens if usage else 0,
                     finish_reason=response.choices[0].finish_reason or "unknown",
@@ -108,5 +102,3 @@ class DeepSeekLLM(BaseLLM):
     
 
     # Add more methods as needed for the DeepSeek client functionality
-
-

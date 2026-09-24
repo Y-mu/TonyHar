@@ -2,7 +2,7 @@
 
 from collections.abc import Sequence
 
-from .vector_store_base import Chunk, VectorStore
+from .vector_store_base import Chunk, DocumentSummary, VectorStore
 
 
 class DocumentService:
@@ -62,3 +62,7 @@ class DocumentService:
     def delete_document(self, document_id: str) -> int:
         """删除一个文档对应的全部切片。"""
         return self.vector_store.delete_document(document_id)
+
+    def list_documents(self) -> list[DocumentSummary]:
+        """通过存储抽象读取文档目录。"""
+        return list(self.vector_store.list_documents())

@@ -4,26 +4,51 @@ import asyncio
 import os
 
 from core.agent import Agent
+from core.intent_planner import IntentPlanner
 from core.llm import DeepSeekLLM
+from core.parser import TxtParser
 from core.userIntentrecognizer import get_shared_intent_recognizer
-from core.tool import ToolRegistry
-from tools.calculator import CalculatorTool
-from tools.file_ingestion import FileIngestionTool
-from tools.knowledge_list import KnowledgeListTool
-from tools.knowledge_search import KnowledgeSearchTool
+from tooling import ToolRegistry
+
+from rag.chroma_store_imp import ChromaStoreImp
+from rag.document_service import DocumentService
+from rag.retriever import Retriever
+from rag.scheduler import DocumentScheduler
+from rag.splitter import HybridSplitter, SplitterConfig
+from tools.calculator import calculator
+from tools.file_ingestion import create_file_ingestion_tool
+from tools.knowledge_list import create_knowledge_list_tool
+from tools.knowledge_search import create_knowledge_search_tool
 
 
 def build_agent() -> Agent:
     llm = DeepSeekLLM(api_key=os.environ.get("DEEPSEEK_API_KEY"))
+    store = ChromaStoreImp(
+        database_name="data/chroma",
+        collection_name="documents",
+    )
+    document_service = DocumentService(store)
+    retriever = Retriever(store)
+    scheduler = DocumentScheduler(
+        parser=TxtParser(),
+        splitter=HybridSplitter(
+            config=SplitterConfig(chunk_size=512, chunk_overlap=64)
+        ),
+        document_service=document_service,
+    )
+
     registry = ToolRegistry()
-    registry.register(CalculatorTool())
-    registry.register(FileIngestionTool())
-    registry.register(KnowledgeListTool())
-    registry.register(KnowledgeSearchTool())
+    registry.register_many(
+        calculator,
+        create_file_ingestion_tool(scheduler),
+        create_knowledge_list_tool(document_service),
+        create_knowledge_search_tool(retriever),
+    )
+
     return Agent(
         llm=llm,
         tools=registry,
-        intent_recognizer=get_shared_intent_recognizer(),
+        intent_planner=IntentPlanner(get_shared_intent_recognizer()),
         system_prompt=(
             "你是一个会使用工具的助手。需要计算时调用 calculator。"
             "如果系统提示文件已入库，请向用户说明入库结果。"
@@ -39,7 +64,9 @@ async def main() -> None:
         user_input = input("你: ").strip()
         if user_input.lower() in {"exit", "quit"}:
             break
-        print("Agent:", await agent.run(user_input))
+        if not user_input:
+            continue
+        print("Agent:", await agent.invoke(user_input))
 
 
 if __name__ == "__main__":

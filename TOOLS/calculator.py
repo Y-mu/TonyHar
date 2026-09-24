@@ -1,15 +1,13 @@
-from core.tool import BaseTool
+"""数学计算工具。"""
 
-class CalculatorTool(BaseTool):
-    name = "calculator"
-    description = "执行数学计算，输入表达式如 '2+3*4'"
-    parameters = {
-        "type": "object",
-        "properties": {
-            "expression": {"type": "string", "description": "数学表达式"}
-        },
-        "required": ["expression"],
-    }
+from tooling import tool
 
-    def run(self, expression: str) -> str:
-        return str(eval(expression))  # 生产环境别用 eval
+
+@tool
+def calculator(expression: str) -> str:
+    """执行数学计算。
+
+    Args:
+        expression: 数学表达式，例如 2+3*4。
+    """
+    return str(eval(expression))  # 生产环境应替换为 AST 白名单解析器
