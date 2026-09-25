@@ -37,3 +37,8 @@ chroma_db/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Frontend build and dependency artifacts
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/

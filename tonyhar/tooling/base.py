@@ -42,6 +42,10 @@ class BaseTool(ABC):
         """异步执行工具并返回可序列化结果。"""
         raise NotImplementedError
 
+    def format_result(self, data: Any) -> str | None:
+        """返回面向用户的展示文本；默认继续展示结构化 JSON。"""
+        return None
+
     def to_schema(self) -> dict:
         """转换为 OpenAI 兼容的 Function Calling schema。"""
         return {

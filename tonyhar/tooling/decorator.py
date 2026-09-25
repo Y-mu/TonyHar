@@ -95,6 +95,7 @@ class FunctionTool(BaseTool):
         name: str | None = None,
         description: str | None = None,
         policy: ToolPolicy | None = None,
+        result_formatter: Callable[[Any], str] | None = None,
     ):
         if not inspect.iscoroutinefunction(function):
             raise TypeError("@tool 只接受 async def 工具函数")
@@ -139,11 +140,17 @@ class FunctionTool(BaseTool):
             "additionalProperties": False,
         }
         self.policy = policy or ToolPolicy()
+        self._result_formatter = result_formatter
         self._function = function
         update_wrapper(self, function)
 
     async def execute(self, **kwargs) -> Any:
         return await self._function(**kwargs)
+
+    def format_result(self, data: Any) -> str | None:
+        if self._result_formatter is None:
+            return None
+        return self._result_formatter(data)
 
 
 def tool(
@@ -152,6 +159,7 @@ def tool(
     name: str | None = None,
     description: str | None = None,
     policy: ToolPolicy | None = None,
+    result_formatter: Callable[[Any], str] | None = None,
 ):
     """把带类型提示和 docstring 的函数转换为 FunctionTool。"""
 
@@ -161,6 +169,7 @@ def tool(
             name=name,
             description=description,
             policy=policy,
+            result_formatter=result_formatter,
         )
 
     if function is None:

@@ -8,6 +8,7 @@ from tonyhar.agent.runnables import AgentRunContext, AgentState
 from tonyhar.agent.user_intent_recognizer import IntentResult
 from tonyhar.resilience import Deadline, RunDeadlineExceeded
 from tonyhar.tooling import BaseTool, ToolRegistry, ToolRequest
+from tonyhar.tools.knowledge_list import format_knowledge_list
 
 
 class KnowledgeQueryRecognizer:
@@ -45,6 +46,9 @@ class RecordingListTool(BaseTool):
 
     async def execute(self):
         return {"documents": ["manual.txt"]}
+
+    def format_result(self, data):
+        return format_knowledge_list(data)
 
 
 class TestLLM(BaseLLM):
@@ -174,8 +178,10 @@ class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result.success)
         self.assertEqual(
-            json.loads(result.answer),
-            {"documents": ["manual.txt"]},
+            result.answer,
+            "## 知识库文档\n\n"
+            "当前共有 **1** 篇已入库文档：\n\n"
+            "1. `manual.txt`",
         )
         self.assertIs(context.state, AgentState.COMPLETED)
 

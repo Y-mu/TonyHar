@@ -53,6 +53,7 @@ class ToolResult:
     error_message: str | None = None
     attempts: int = 1
     duration_ms: float = 0.0
+    display_content: str | None = None
 
     @property
     def content(self) -> str:

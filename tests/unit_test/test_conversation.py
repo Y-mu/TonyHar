@@ -165,6 +165,54 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
             ["hello", "answer:hello"],
         )
 
+    async def test_get_session_returns_an_independent_snapshot(self):
+        service = ChatService(RecordingAgent(), InMemorySessionStore())
+        await service.invoke("session", "hello")
+
+        snapshot = await service.get_session("session")
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        snapshot.messages.clear()
+
+        stored = await service.get_session("session")
+        self.assertIsNotNone(stored)
+        assert stored is not None
+        self.assertEqual(len(stored.messages), 2)
+
+    async def test_stream_cancellation_saves_state_and_releases_lock(self):
+        agent = RecordingAgent(delay=10.0)
+        store = InMemorySessionStore()
+        service = ChatService(agent, store)
+
+        async def consume() -> None:
+            async for _ in service.stream("cancelled", "partial"):
+                pass
+
+        task = asyncio.create_task(consume())
+        for _ in range(100):
+            if agent.contexts:
+                break
+            await asyncio.sleep(0)
+
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+        saved = await store.get("cancelled")
+        self.assertIsNotNone(saved)
+        assert saved is not None
+        self.assertEqual(
+            [message["content"] for message in saved.messages],
+            ["partial"],
+        )
+
+        agent.delay = 0
+        result = await asyncio.wait_for(
+            service.invoke("cancelled", "next"),
+            timeout=0.5,
+        )
+        self.assertTrue(result.success)
+
     async def test_close_releases_agent_resources(self):
         agent = RecordingAgent()
         service = ChatService(agent, InMemorySessionStore())

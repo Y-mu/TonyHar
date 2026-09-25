@@ -13,6 +13,7 @@ class ArchitectureDependencyTest(unittest.TestCase):
         "resilience",
         "tooling",
         "tools",
+        "web",
     }
 
     def test_internal_packages_have_no_dependency_cycle(self):

@@ -51,6 +51,16 @@ class ChatService:
             await self._sessions.create(session)
         return session.clone()
 
+    async def get_session(self, session_id: str) -> Session | None:
+        """返回一致的会话快照，不向调用方暴露存储中的可变对象。"""
+        if not isinstance(session_id, str) or not session_id.strip():
+            raise ValueError("session_id 不能为空")
+
+        resolved_id = session_id.strip()
+        async with self._locks.lock(resolved_id):
+            session = await self._sessions.get(resolved_id)
+        return session.clone() if session is not None else None
+
     async def invoke(
         self,
         session_id: str,

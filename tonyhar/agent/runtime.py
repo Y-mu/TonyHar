@@ -381,7 +381,8 @@ class Agent(AgentStateMachine):
         if not results:
             return ""
         if len(results) == 1:
-            return results[0].content
+            result = results[0]
+            return result.display_content or result.content
         return json.dumps(
             [result.to_dict() for result in results],
             ensure_ascii=False,

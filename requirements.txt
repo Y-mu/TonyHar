@@ -4,3 +4,6 @@ torch
 tiktoken
 openai
 semantic-router
+fastapi
+sse-starlette
+uvicorn[standard]

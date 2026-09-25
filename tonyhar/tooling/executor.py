@@ -67,6 +67,7 @@ class ToolExecutor:
                     success=True,
                     tool_call_id=tool_request.tool_call_id,
                     data=data,
+                    display_content=tool.format_result(data),
                     attempts=attempt,
                     duration_ms=self._duration_ms(started_at),
                 )
