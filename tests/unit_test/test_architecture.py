@@ -5,13 +5,21 @@ import unittest
 
 class ArchitectureDependencyTest(unittest.TestCase):
     PROJECT_ROOT = Path(__file__).resolve().parents[2]
-    PACKAGES = {"core", "rag", "tooling", "tools"}
+    SOURCE_ROOT = PROJECT_ROOT / "tonyhar"
+    PACKAGES = {
+        "agent",
+        "conversation",
+        "rag",
+        "resilience",
+        "tooling",
+        "tools",
+    }
 
     def test_internal_packages_have_no_dependency_cycle(self):
         graph = {package: set() for package in self.PACKAGES}
 
         for package in self.PACKAGES:
-            for path in (self.PROJECT_ROOT / package).rglob("*.py"):
+            for path in (self.SOURCE_ROOT / package).rglob("*.py"):
                 tree = ast.parse(path.read_text(encoding="utf-8"))
                 for node in ast.walk(tree):
                     targets: list[str] = []
@@ -25,9 +33,15 @@ class ArchitectureDependencyTest(unittest.TestCase):
                         targets = [node.module]
 
                     for target in targets:
-                        top_level = target.split(".", 1)[0]
-                        if top_level in self.PACKAGES and top_level != package:
-                            graph[package].add(top_level)
+                        parts = target.split(".")
+                        if len(parts) < 2 or parts[0] != "tonyhar":
+                            continue
+                        target_package = parts[1]
+                        if (
+                            target_package in self.PACKAGES
+                            and target_package != package
+                        ):
+                            graph[package].add(target_package)
 
         visiting: set[str] = set()
         visited: set[str] = set()
@@ -47,6 +61,22 @@ class ArchitectureDependencyTest(unittest.TestCase):
 
         for package in graph:
             visit(package, ())
+
+    def test_legacy_top_level_packages_have_no_python_modules(self):
+        for package in {
+            "conversation",
+            "core",
+            "rag",
+            "resilience",
+            "tooling",
+            "tools",
+        }:
+            legacy_root = self.PROJECT_ROOT / package
+            self.assertEqual(
+                list(legacy_root.rglob("*.py")) if legacy_root.exists() else [],
+                [],
+                f"旧顶层包仍包含 Python 模块: {package}",
+            )
 
 
 if __name__ == "__main__":

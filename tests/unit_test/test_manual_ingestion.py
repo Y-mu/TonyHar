@@ -4,12 +4,12 @@ import unittest
 from pathlib import Path
 from typing import Sequence
 
-from core.parser import TxtParser
-from rag.document_service import DocumentService
-from rag.pipeline_context import PipelineContext
-from rag.scheduler import DocumentScheduler
-from rag.splitter import HybridSplitter, SplitterConfig
-from rag.vector_store_base import Chunk, DocumentSummary, VectorStore
+from tonyhar.rag.document_service import DocumentService
+from tonyhar.rag.parser import TxtParser
+from tonyhar.rag.pipeline_context import PipelineContext
+from tonyhar.rag.scheduler import DocumentScheduler
+from tonyhar.rag.splitter import HybridSplitter, SplitterConfig
+from tonyhar.rag.vector_store_base import Chunk, DocumentSummary, VectorStore
 
 
 class MemoryVectorStore(VectorStore):

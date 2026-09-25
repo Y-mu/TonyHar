@@ -3,22 +3,33 @@
 import asyncio
 import os
 
-from core.agent import Agent
-from core.intent_planner import IntentPlanner
-from core.llm import DeepSeekLLM
-from core.parser import TxtParser
-from core.userIntentrecognizer import get_shared_intent_recognizer
-from tooling import ToolRegistry
+from tonyhar.agent import Agent
+from tonyhar.agent.intent_planner import IntentPlanner
+from tonyhar.agent.llm import DeepSeekLLM
+from tonyhar.agent.user_intent_recognizer import (
+    get_shared_intent_recognizer,
+)
+from tonyhar.conversation import ChatService, InMemorySessionStore
+from tonyhar.tooling import ToolRegistry
 
-from rag.chroma_store_imp import ChromaStoreImp
-from rag.document_service import DocumentService
-from rag.retriever import Retriever
-from rag.scheduler import DocumentScheduler
-from rag.splitter import HybridSplitter, SplitterConfig
-from tools.calculator import calculator
-from tools.file_ingestion import create_file_ingestion_tool
-from tools.knowledge_list import create_knowledge_list_tool
-from tools.knowledge_search import create_knowledge_search_tool
+from tonyhar.rag.chroma_store_imp import ChromaStoreImp
+from tonyhar.rag.document_service import DocumentService
+from tonyhar.rag.parser import TxtParser
+from tonyhar.rag.retriever import Retriever
+from tonyhar.rag.scheduler import DocumentScheduler
+from tonyhar.rag.splitter import HybridSplitter, SplitterConfig
+from tonyhar.tools.calculator import calculator
+from tonyhar.tools.file_ingestion import create_file_ingestion_tool
+from tonyhar.tools.knowledge_list import create_knowledge_list_tool
+from tonyhar.tools.knowledge_search import create_knowledge_search_tool
+
+
+SYSTEM_PROMPT = (
+    "你是一个会使用工具的助手。需要计算时调用 calculator。"
+    "如果系统提示文件已入库，请向用户说明入库结果。"
+    "回答知识库问题时，只能依据 knowledge_search 返回的片段，"
+    "没有检索到相关内容时应明确说明。"
+)
 
 
 def build_agent() -> Agent:
@@ -49,24 +60,37 @@ def build_agent() -> Agent:
         llm=llm,
         tools=registry,
         intent_planner=IntentPlanner(get_shared_intent_recognizer()),
-        system_prompt=(
-            "你是一个会使用工具的助手。需要计算时调用 calculator。"
-            "如果系统提示文件已入库，请向用户说明入库结果。"
-            "回答知识库问题时，只能依据 knowledge_search 返回的片段，"
-            "没有检索到相关内容时应明确说明。"
-        ),
     )
 
-async def main() -> None:
-    agent = build_agent()
 
-    while True:
-        user_input = input("你: ").strip()
-        if user_input.lower() in {"exit", "quit"}:
-            break
-        if not user_input:
-            continue
-        print("Agent:", await agent.invoke(user_input))
+def build_chat_service() -> ChatService:
+    """装配无状态 Agent 和进程内会话存储。"""
+    return ChatService(
+        agent=build_agent(),
+        sessions=InMemorySessionStore(),
+        system_prompt=SYSTEM_PROMPT,
+    )
+
+
+async def main() -> None:
+    chat_service = build_chat_service()
+    session_id = "cli"
+    await chat_service.create_session(session_id)
+
+    try:
+        while True:
+            user_input = (await asyncio.to_thread(input, "你: ")).strip()
+            if user_input.lower() in {"exit", "quit"}:
+                break
+            if not user_input:
+                continue
+            result = await chat_service.invoke(session_id, user_input)
+            if result.success:
+                print("Agent:", result.answer)
+            else:
+                print("Agent error:", result.error_message or result.answer)
+    finally:
+        await chat_service.aclose()
 
 
 if __name__ == "__main__":

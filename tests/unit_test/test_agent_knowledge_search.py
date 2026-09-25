@@ -1,11 +1,13 @@
 import json
 import unittest
 
-from core.agent import Agent
-from core.intent_planner import ExecutionMode, IntentPlan, IntentPlanner
-from core.llm import BaseLLM, LLMResponse
-from core.userIntentrecognizer import IntentResult
-from tooling import BaseTool, ToolRegistry, ToolRequest
+from tonyhar.agent import Agent
+from tonyhar.agent.intent_planner import ExecutionMode, IntentPlan, IntentPlanner
+from tonyhar.agent.llm import BaseLLM, LLMResponse, ModelUnavailableError
+from tonyhar.agent.runnables import AgentRunContext, AgentState
+from tonyhar.agent.user_intent_recognizer import IntentResult
+from tonyhar.resilience import Deadline, RunDeadlineExceeded
+from tonyhar.tooling import BaseTool, ToolRegistry, ToolRequest
 
 
 class KnowledgeQueryRecognizer:
@@ -31,7 +33,7 @@ class RecordingSearchTool(BaseTool):
     def __init__(self):
         self.queries = []
 
-    def run(self, query, top_k=5):
+    async def execute(self, query, top_k=5):
         self.queries.append((query, top_k))
         return {"matches": [{"text": "检索证据"}]}
 
@@ -41,29 +43,44 @@ class RecordingListTool(BaseTool):
     description = "test list"
     parameters = {"type": "object", "properties": {}}
 
-    def run(self):
+    async def execute(self):
         return {"documents": ["manual.txt"]}
 
 
-class RecordingLLM(BaseLLM):
+class TestLLM(BaseLLM):
+    async def aclose(self):
+        return None
+
+
+class RecordingLLM(TestLLM):
     def __init__(self):
         self.messages = None
 
-    async def chat(self, messages, tools):
+    async def chat(self, messages, tools, *, deadline):
         self.messages = list(messages)
         return LLMResponse(content="根据检索证据作答")
 
 
-class UnexpectedLLM(BaseLLM):
-    async def chat(self, messages, tools):
+class UnexpectedLLM(TestLLM):
+    async def chat(self, messages, tools, *, deadline):
         raise AssertionError("确定性路由不应继续调用 LLM")
 
 
-class ThinkingToolLLM(BaseLLM):
+class FailingLLM(TestLLM):
+    async def chat(self, messages, tools, *, deadline):
+        raise ModelUnavailableError("model unavailable")
+
+
+class DeadlineLLM(TestLLM):
+    async def chat(self, messages, tools, *, deadline):
+        raise RunDeadlineExceeded()
+
+
+class ThinkingToolLLM(TestLLM):
     def __init__(self):
         self.calls = []
 
-    async def chat(self, messages, tools):
+    async def chat(self, messages, tools, *, deadline):
         self.calls.append(list(messages))
         if len(self.calls) == 1:
             return LLMResponse(
@@ -77,6 +94,16 @@ class ThinkingToolLLM(BaseLLM):
 
 
 class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def context(user_input: str) -> AgentRunContext:
+        return AgentRunContext(
+            run_id="run-test",
+            session_id="session-test",
+            user_input=user_input,
+            messages=[],
+            deadline=Deadline.after(1),
+        )
+
     async def test_intent_route_returns_tool_request_without_executing_it(self):
         registry = ToolRegistry()
         registry.register(RecordingListTool())
@@ -105,14 +132,33 @@ class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):
             intent_planner=IntentPlanner(KnowledgeQueryRecognizer()),
         )
 
-        answer = await agent.invoke("文档中的维修建议是什么？")
+        context = self.context("文档中的维修建议是什么？")
+        result = await agent.invoke(context)
 
-        self.assertEqual(answer, "根据检索证据作答")
+        self.assertTrue(result.success)
+        self.assertEqual(result.answer, "根据检索证据作答")
+        self.assertIs(context.state, AgentState.COMPLETED)
         self.assertEqual(search.queries, [("文档中的维修建议是什么？", 5)])
         self.assertEqual(llm.messages[-2]["role"], "assistant")
         self.assertEqual(llm.messages[-1]["role"], "tool")
         result = json.loads(llm.messages[-1]["content"])
         self.assertEqual(result["matches"][0]["text"], "检索证据")
+
+    async def test_runtime_error_returns_structured_failed_result(self):
+        agent = Agent(
+            llm=FailingLLM(),
+            tools=ToolRegistry(),
+            intent_planner=IntentPlanner(ChatRecognizer()),
+        )
+        context = self.context("你好")
+
+        result = await agent.invoke(context)
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error_code, "model_unavailable")
+        self.assertEqual(result.error_message, "model unavailable")
+        self.assertIs(context.state, AgentState.FAILED)
+        self.assertFalse(hasattr(agent, "memory"))
 
     async def test_knowledge_list_route_returns_without_calling_llm(self):
         registry = ToolRegistry()
@@ -123,9 +169,28 @@ class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):
             intent_planner=IntentPlanner(KnowledgeListRecognizer()),
         )
 
-        answer = await agent.invoke("列出文档")
+        context = self.context("列出文档")
+        result = await agent.invoke(context)
 
-        self.assertEqual(json.loads(answer), {"documents": ["manual.txt"]})
+        self.assertTrue(result.success)
+        self.assertEqual(
+            json.loads(result.answer),
+            {"documents": ["manual.txt"]},
+        )
+        self.assertIs(context.state, AgentState.COMPLETED)
+
+    async def test_run_deadline_has_stable_terminal_error_code(self):
+        agent = Agent(
+            llm=DeadlineLLM(),
+            tools=ToolRegistry(),
+            intent_planner=IntentPlanner(ChatRecognizer()),
+        )
+
+        result = await agent.invoke(self.context("你好"))
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.stop_reason, "timeout")
+        self.assertEqual(result.error_code, "run_timeout")
 
     async def test_reasoning_content_is_preserved_for_tool_follow_up(self):
         registry = ToolRegistry()
@@ -137,9 +202,11 @@ class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):
             intent_planner=IntentPlanner(ChatRecognizer()),
         )
 
-        answer = await agent.invoke("请调用工具")
+        context = self.context("请调用工具")
+        result = await agent.invoke(context)
 
-        self.assertEqual(answer, "工具调用完成")
+        self.assertTrue(result.success)
+        self.assertEqual(result.answer, "工具调用完成")
         assistant_message = llm.calls[1][-2]
         self.assertEqual(
             assistant_message["reasoning_content"],

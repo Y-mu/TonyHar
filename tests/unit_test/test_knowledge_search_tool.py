@@ -1,7 +1,7 @@
 import unittest
 
-from rag.vector_store_base import Chunk
-from tools.knowledge_search import create_knowledge_search_tool
+from tonyhar.rag.vector_store_base import Chunk
+from tonyhar.tools.knowledge_search import create_knowledge_search_tool
 
 
 class FakeRetriever:
@@ -16,14 +16,14 @@ class FakeRetriever:
         ][:top_k]
 
 
-class KnowledgeSearchToolTest(unittest.TestCase):
+class KnowledgeSearchToolTest(unittest.IsolatedAsyncioTestCase):
     QUERY = '有资料称“允许ECU调校提升发动机性能，但需符合国六排放标准'
 
     def setUp(self):
         self.tool = create_knowledge_search_tool(FakeRetriever())
 
-    def test_knowledge_search_tool_parameters(self):
-        result = self.tool.run(query=self.QUERY, top_k=5)
+    async def test_knowledge_search_tool_parameters(self):
+        result = await self.tool.execute(query=self.QUERY, top_k=5)
 
         self.assertEqual(result["count"], 1)
         self.assertEqual(result["matches"][0]["chunk_id"], "chunk-1")

@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from core.userIntentrecognizer import (
+from tonyhar.agent.user_intent_recognizer import (
     DEFAULT_INTENT_ROUTER_CONFIG,
     UserIntentRecognizer,
 )

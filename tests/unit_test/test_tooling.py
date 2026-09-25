@@ -1,10 +1,12 @@
 import json
 import unittest
 
-from tooling import (
+from tonyhar.resilience import Deadline
+from tonyhar.tooling import (
     BaseTool,
     FunctionTool,
     ToolExecutor,
+    ToolPolicy,
     ToolRegistry,
     ToolRequest,
     ToolResult,
@@ -21,7 +23,7 @@ class EchoTool(BaseTool):
         "required": ["text"],
     }
 
-    def run(self, text: str):
+    async def execute(self, text: str):
         return {"text": text}
 
 
@@ -30,12 +32,12 @@ class BrokenTool(BaseTool):
     description = "始终失败"
     parameters = {"type": "object", "properties": {}}
 
-    def run(self):
+    async def execute(self):
         raise RuntimeError("测试异常")
 
 
 @tool
-def decorated_search(query: str, limit: int = 10) -> str:
+async def decorated_search(query: str, limit: int = 10) -> str:
     """搜索测试数据。
 
     Args:
@@ -45,20 +47,24 @@ def decorated_search(query: str, limit: int = 10) -> str:
     return f"{query}:{limit}"
 
 
-class ToolExecutorTest(unittest.TestCase):
+class ToolExecutorTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.registry = ToolRegistry()
         self.registry.register(EchoTool())
         self.registry.register(BrokenTool())
+        self.executor = ToolExecutor(self.registry)
 
-    def test_invoke_returns_tool_result(self):
+    async def test_execute_returns_tool_result(self):
         request = ToolRequest(
             name="echo",
             arguments={"text": "你好"},
             tool_call_id="call-1",
         )
 
-        result = ToolExecutor.invoke(request, self.registry)
+        result = await self.executor.execute(
+            request,
+            deadline=Deadline.after(1),
+        )
 
         self.assertIsInstance(result, ToolResult)
         self.assertTrue(result.success)
@@ -66,7 +72,7 @@ class ToolExecutorTest(unittest.TestCase):
         self.assertEqual(result.data, {"text": "你好"})
         self.assertEqual(json.loads(result.content), {"text": "你好"})
 
-    def test_register_many_registers_all_tools(self):
+    async def test_register_many_registers_all_tools(self):
         registry = ToolRegistry()
 
         registry.register_many(EchoTool(), BrokenTool())
@@ -75,7 +81,7 @@ class ToolExecutorTest(unittest.TestCase):
         self.assertIsInstance(registry.get("broken"), BrokenTool)
         self.assertEqual(len(registry.schemas()), 2)
 
-    def test_tool_decorator_builds_schema_from_signature(self):
+    async def test_tool_decorator_builds_schema_from_signature(self):
         self.assertIsInstance(decorated_search, FunctionTool)
         self.assertEqual(decorated_search.name, "decorated_search")
         self.assertIn("搜索测试数据", decorated_search.description)
@@ -92,42 +98,57 @@ class ToolExecutorTest(unittest.TestCase):
             },
         )
         self.assertEqual(decorated_search.parameters["required"], ["query"])
-        self.assertEqual(decorated_search(query="发动机"), "发动机:10")
+        self.assertEqual(
+            await decorated_search.execute(query="发动机"),
+            "发动机:10",
+        )
 
-    def test_tool_decorator_requires_parameter_type_hints(self):
+    async def test_tool_decorator_requires_parameter_type_hints(self):
         with self.assertRaisesRegex(TypeError, "必须提供类型提示"):
 
             @tool
-            def invalid_tool(value):
+            async def invalid_tool(value):
                 """缺少参数类型提示。"""
                 return value
 
-    def test_missing_tool_returns_failed_result(self):
-        result = ToolExecutor.invoke(
+    async def test_missing_tool_returns_failed_result(self):
+        result = await self.executor.execute(
             ToolRequest(name="missing", tool_call_id="call-2"),
-            self.registry,
+            deadline=Deadline.after(1),
         )
 
         self.assertFalse(result.success)
         self.assertEqual(result.error_code, "tool_not_found")
         self.assertEqual(result.tool_call_id, "call-2")
 
-    def test_tool_exception_returns_failed_result(self):
-        result = ToolExecutor.invoke(
+    async def test_tool_exception_returns_failed_result(self):
+        result = await self.executor.execute(
             ToolRequest(name="broken"),
-            self.registry,
+            deadline=Deadline.after(1),
         )
 
         self.assertFalse(result.success)
         self.assertEqual(result.error_code, "tool_execution_error")
         self.assertEqual(result.error_message, "测试异常")
 
-    def test_executor_rejects_raw_dict_request(self):
+    async def test_executor_rejects_raw_dict_request(self):
         with self.assertRaisesRegex(TypeError, "ToolRequest"):
-            ToolExecutor.invoke(  # type: ignore[arg-type]
+            await self.executor.execute(  # type: ignore[arg-type]
                 {"name": "echo", "arguments": {}},
-                self.registry,
+                deadline=Deadline.after(1),
             )
+
+    async def test_tool_decorator_rejects_sync_function(self):
+        with self.assertRaisesRegex(TypeError, "async def"):
+
+            @tool
+            def sync_tool(value: str) -> str:
+                """同步工具。"""
+                return value
+
+    async def test_non_idempotent_tool_cannot_enable_retry(self):
+        with self.assertRaisesRegex(ValueError, "幂等工具"):
+            ToolPolicy(max_attempts=2, idempotent=False)
 
 
 if __name__ == "__main__":
