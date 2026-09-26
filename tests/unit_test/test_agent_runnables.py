@@ -13,7 +13,7 @@ from tonyhar.agent.runnables import (
 )
 from tonyhar.agent.user_intent_recognizer import IntentResult
 from tonyhar.resilience import Deadline
-from tonyhar.tooling import ToolRegistry, ToolRequest, tool
+from tonyhar.tooling import ToolManager, ToolRequest
 
 
 class ChatRecognizer:
@@ -76,7 +76,7 @@ class AgentRunnablesTest(unittest.TestCase):
         async def run():
             agent = Agent(
                 llm=EventLLM(),
-                tools=ToolRegistry(),
+                tool_manager=ToolManager(),
                 intent_planner=IntentPlanner(ChatRecognizer()),
             )
             context = AgentRunContext(

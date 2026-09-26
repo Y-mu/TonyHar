@@ -10,20 +10,28 @@ from tonyhar.agent.llm import (
 from tonyhar.resilience import Deadline, RetryPolicy, RunDeadlineExceeded
 from tonyhar.resilience import CircuitBreaker, CircuitOpenError
 from tonyhar.tooling import (
+    BaseTool,
     RetryableToolError,
-    ToolExecutor,
+    ToolManager,
     ToolPolicy,
-    ToolRegistry,
     ToolRequest,
-    tool,
 )
 
 
-@tool(policy=ToolPolicy(parallel_safe=True))
-async def async_echo(text: str) -> str:
-    """异步返回输入。"""
-    await asyncio.sleep(0)
-    return text
+class AsyncEchoTool(BaseTool):
+    name = "async_echo"
+    description = "异步返回输入"
+    parameters = {
+        "type": "object",
+        "properties": {"text": {"type": "string"}},
+        "required": ["text"],
+        "additionalProperties": False,
+    }
+    policy = ToolPolicy(parallel_safe=True)
+
+    async def execute(self, text: str) -> str:
+        await asyncio.sleep(0)
+        return text
 
 
 class FakeCompletions:
@@ -62,22 +70,21 @@ class AsyncToolRuntimeTest(unittest.IsolatedAsyncioTestCase):
         active = 0
         max_active = 0
 
-        @tool(policy=ToolPolicy(parallel_safe=True))
-        async def tracked_echo(text: str) -> str:
-            """记录并发执行。"""
-            nonlocal active, max_active
-            active += 1
-            max_active = max(max_active, active)
-            try:
-                await asyncio.sleep(0.01)
-                return text
-            finally:
-                active -= 1
+        class TrackedEchoTool(AsyncEchoTool):
+            name = "tracked_echo"
 
-        registry = ToolRegistry()
-        registry.register(tracked_echo)
-        executor = ToolExecutor(registry, max_concurrency=2)
-        results = await executor.execute_many([
+            async def execute(self, text: str) -> str:
+                nonlocal active, max_active
+                active += 1
+                max_active = max(max_active, active)
+                try:
+                    await asyncio.sleep(0.01)
+                    return text
+                finally:
+                    active -= 1
+
+        manager = ToolManager([TrackedEchoTool], max_concurrency=2)
+        results = await manager.execute_many([
             ToolRequest(name="tracked_echo", arguments={"text": "a"}),
             ToolRequest(name="tracked_echo", arguments={"text": "b"}),
         ], deadline=Deadline.after(1))
@@ -88,23 +95,30 @@ class AsyncToolRuntimeTest(unittest.IsolatedAsyncioTestCase):
     async def test_idempotent_tool_retries_temporary_failure(self):
         calls = 0
 
-        @tool(policy=ToolPolicy(
-            max_attempts=2,
-            idempotent=True,
-            retry_base_delay=0,
-            retry_max_delay=0,
-        ))
-        async def flaky_tool() -> str:
-            """首次执行暂时失败。"""
-            nonlocal calls
-            calls += 1
-            if calls == 1:
-                raise RetryableToolError("temporary")
-            return "ok"
+        class FlakyTool(BaseTool):
+            name = "flaky_tool"
+            description = "首次执行暂时失败"
+            parameters = {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            }
+            policy = ToolPolicy(
+                max_attempts=2,
+                idempotent=True,
+                retry_base_delay=0,
+                retry_max_delay=0,
+            )
 
-        registry = ToolRegistry()
-        registry.register(flaky_tool)
-        result = await ToolExecutor(registry).execute(
+            async def execute(self) -> str:
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    raise RetryableToolError("temporary")
+                return "ok"
+
+        result = await ToolManager([FlakyTool]).execute(
             ToolRequest(name="flaky_tool"),
             deadline=Deadline.after(1),
         )
@@ -113,15 +127,22 @@ class AsyncToolRuntimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.attempts, 2)
 
     async def test_tool_timeout_returns_structured_failure(self):
-        @tool(policy=ToolPolicy(timeout_seconds=0.01))
-        async def slow_tool() -> str:
-            """故意超时。"""
-            await asyncio.sleep(1)
-            return "late"
+        class SlowTool(BaseTool):
+            name = "slow_tool"
+            description = "故意超时"
+            parameters = {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            }
+            policy = ToolPolicy(timeout_seconds=0.01)
 
-        registry = ToolRegistry()
-        registry.register(slow_tool)
-        result = await ToolExecutor(registry).execute(
+            async def execute(self) -> str:
+                await asyncio.sleep(1)
+                return "late"
+
+        result = await ToolManager([SlowTool]).execute(
             ToolRequest(name="slow_tool"),
             deadline=Deadline.after(1),
         )

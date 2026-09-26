@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 
 @dataclass(frozen=True)
@@ -31,11 +31,24 @@ class RetryableToolError(RuntimeError):
     """工具可用此异常显式声明一次暂时性失败。"""
 
 
-class BaseTool(ABC):
+@dataclass(frozen=True)
+class ToolDefinition:
+    """工具对模型可见的静态定义。"""
+
     name: str
     description: str
-    parameters: dict
-    policy: ToolPolicy = ToolPolicy()
+    parameters: dict[str, Any]
+    policy: ToolPolicy
+
+
+class BaseTool(ABC):
+    """所有业务工具必须实现的统一接口。"""
+
+    name: ClassVar[str]
+    description: ClassVar[str]
+    parameters: ClassVar[dict[str, Any]]
+    policy: ClassVar[ToolPolicy] = ToolPolicy()
+    __tool_definition__: ClassVar[ToolDefinition | None] = None
 
     @abstractmethod
     async def execute(self, **kwargs) -> Any:
@@ -46,13 +59,28 @@ class BaseTool(ABC):
         """返回面向用户的展示文本；默认继续展示结构化 JSON。"""
         return None
 
+    @property
+    def definition(self) -> ToolDefinition:
+        """返回工具的完整静态定义。"""
+        declared = self.__dict__.get("__tool_definition__")
+        if declared is None:
+            declared = self.__class__.__dict__.get("__tool_definition__")
+        if isinstance(declared, ToolDefinition):
+            return declared
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters=self.parameters,
+            policy=self.policy,
+        )
+
     def to_schema(self) -> dict:
         """转换为 OpenAI 兼容的 Function Calling schema。"""
         return {
             "type": "function",
             "function": {
-                "name": self.name,
-                "description": self.description,
-                "parameters": self.parameters,
+                "name": self.definition.name,
+                "description": self.definition.description,
+                "parameters": self.definition.parameters,
             },
         }

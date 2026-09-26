@@ -19,7 +19,7 @@ ChatService
     └── Agent.stream(context)
             ├── IntentPlanner
             ├── Deadline → AsyncOpenAI / DeepSeekLLM
-            └── ToolExecutor
+            └── ToolManager
                     └── ToolRequest → ToolResult
 ```
 
@@ -38,10 +38,17 @@ ChatService
 - 每轮运行共享一个总 deadline；模型和工具的单次超时都不能突破总预算。
 - 模型调用包含有界重试、full jitter 指数退避和并发安全熔断器。
 - 工具的唯一运行入口是异步 `BaseTool.execute()`，不保留同步执行协议。
+- `@tool` 将异步函数或 `BaseTool` 子类转换为完整的 `ToolDefinition / BaseTool`；
+  函数参数类型提示、docstring、JSON Schema 或 Pydantic 模型可用于生成参数 Schema。
+- `ToolManager` 在应用启动时构建全部 `BaseTool` 实例，并统一管理 Schema、超时、
+  重试、并发和批量执行。
 - 阻塞型依赖由具体工具显式通过 `asyncio.to_thread()` 隔离。
 - 幂等工具可配置重试；副作用工具默认不重试、串行执行。
 - 标记为 `parallel_safe` 的同轮工具调用受并发上限保护并发执行。
-- 工具使用 `@tool` 自动生成 JSON Schema。
+- 具体工具可以直接实现 `BaseTool`，也可以使用 `@tool` 将异步函数转换为 `BaseTool`；
+  装饰器不修改全局 Manager。
+- Agent 通过 `ToolManager.schemas()` 将全部工具 Schema 传给模型，通过
+  `ToolManager.execute()` 执行模型返回的 `ToolRequest`。
 
 正式错误码区分 `run_timeout`、`model_timeout`、
 `model_rate_limited`、`model_unavailable`、`model_circuit_open`、

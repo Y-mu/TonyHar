@@ -7,7 +7,7 @@ from tonyhar.agent.llm import BaseLLM, LLMResponse, ModelUnavailableError
 from tonyhar.agent.runnables import AgentRunContext, AgentState
 from tonyhar.agent.user_intent_recognizer import IntentResult
 from tonyhar.resilience import Deadline, RunDeadlineExceeded
-from tonyhar.tooling import BaseTool, ToolRegistry, ToolRequest
+from tonyhar.tooling import BaseTool, ToolManager, ToolRequest
 from tonyhar.tools.knowledge_list import format_knowledge_list
 
 
@@ -59,9 +59,11 @@ class TestLLM(BaseLLM):
 class RecordingLLM(TestLLM):
     def __init__(self):
         self.messages = None
+        self.tools = None
 
     async def chat(self, messages, tools, *, deadline):
         self.messages = list(messages)
+        self.tools = list(tools)
         return LLMResponse(content="根据检索证据作答")
 
 
@@ -109,11 +111,10 @@ class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_intent_route_returns_tool_request_without_executing_it(self):
-        registry = ToolRegistry()
-        registry.register(RecordingListTool())
+        tool_manager = ToolManager([RecordingListTool])
         agent = Agent(
             llm=UnexpectedLLM(),
-            tools=registry,
+            tool_manager=tool_manager,
             intent_planner=IntentPlanner(KnowledgeListRecognizer()),
         )
 
@@ -126,13 +127,12 @@ class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(direct_answer.tool_calls[0].name, "knowledge_list")
 
     async def test_knowledge_query_searches_before_llm_generation(self):
-        registry = ToolRegistry()
         search = RecordingSearchTool()
-        registry.register(search)
+        tool_manager = ToolManager([lambda: search])
         llm = RecordingLLM()
         agent = Agent(
             llm=llm,
-            tools=registry,
+            tool_manager=tool_manager,
             intent_planner=IntentPlanner(KnowledgeQueryRecognizer()),
         )
 
@@ -143,6 +143,10 @@ class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.answer, "根据检索证据作答")
         self.assertIs(context.state, AgentState.COMPLETED)
         self.assertEqual(search.queries, [("文档中的维修建议是什么？", 5)])
+        self.assertEqual(
+            [schema["function"]["name"] for schema in llm.tools],
+            ["knowledge_search"],
+        )
         self.assertEqual(llm.messages[-2]["role"], "assistant")
         self.assertEqual(llm.messages[-1]["role"], "tool")
         result = json.loads(llm.messages[-1]["content"])
@@ -151,7 +155,7 @@ class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):
     async def test_runtime_error_returns_structured_failed_result(self):
         agent = Agent(
             llm=FailingLLM(),
-            tools=ToolRegistry(),
+            tool_manager=ToolManager(),
             intent_planner=IntentPlanner(ChatRecognizer()),
         )
         context = self.context("你好")
@@ -165,11 +169,10 @@ class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(hasattr(agent, "memory"))
 
     async def test_knowledge_list_route_returns_without_calling_llm(self):
-        registry = ToolRegistry()
-        registry.register(RecordingListTool())
+        tool_manager = ToolManager([RecordingListTool])
         agent = Agent(
             llm=UnexpectedLLM(),
-            tools=registry,
+            tool_manager=tool_manager,
             intent_planner=IntentPlanner(KnowledgeListRecognizer()),
         )
 
@@ -188,7 +191,7 @@ class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):
     async def test_run_deadline_has_stable_terminal_error_code(self):
         agent = Agent(
             llm=DeadlineLLM(),
-            tools=ToolRegistry(),
+            tool_manager=ToolManager(),
             intent_planner=IntentPlanner(ChatRecognizer()),
         )
 
@@ -199,12 +202,11 @@ class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.error_code, "run_timeout")
 
     async def test_reasoning_content_is_preserved_for_tool_follow_up(self):
-        registry = ToolRegistry()
-        registry.register(RecordingListTool())
+        tool_manager = ToolManager([RecordingListTool])
         llm = ThinkingToolLLM()
         agent = Agent(
             llm=llm,
-            tools=registry,
+            tool_manager=tool_manager,
             intent_planner=IntentPlanner(ChatRecognizer()),
         )
 

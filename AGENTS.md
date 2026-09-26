@@ -16,7 +16,7 @@
 - `Agent.invoke(context)` 只是收集事件后的非流式结果适配，不是另一套运行协议。
 - `ChatService.stream()` 只调用 `Agent.stream()`，不兼容旧版 Agent。
 - 会话状态由 `ChatService` 和 `SessionStore` 管理，Agent 不持有跨请求会话状态。
-- 工具调用统一使用 `ToolRequest -> ToolExecutor -> ToolResult`。
+- 工具调用统一使用 `ToolRequest -> ToolManager -> ToolResult`。
 - `BaseTool.execute(**arguments)` 是工具的唯一异步运行入口。
 
 ## 修改要求

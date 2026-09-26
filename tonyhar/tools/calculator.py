@@ -1,13 +1,27 @@
 """数学计算工具。"""
 
-from tonyhar.tooling import ToolPolicy, tool
+from typing import Any
+
+from tonyhar.tooling import BaseTool, ToolPolicy, tool
 
 
 @tool(policy=ToolPolicy(parallel_safe=True))
-async def calculator(expression: str) -> str:
-    """执行数学计算。
+class CalculatorTool(BaseTool):
+    """执行数学计算。"""
 
-    Args:
-        expression: 数学表达式，例如 2+3*4。
-    """
-    return str(eval(expression))  # 生产环境应替换为 AST 白名单解析器
+    name = "calculator"
+    description = "执行数学计算。"
+    parameters: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "expression": {
+                "type": "string",
+                "description": "数学表达式，例如 2+3*4。",
+            },
+        },
+        "required": ["expression"],
+        "additionalProperties": False,
+    }
+
+    async def execute(self, expression: str) -> str:
+        return str(eval(expression))  # 生产环境应替换为 AST 白名单解析器

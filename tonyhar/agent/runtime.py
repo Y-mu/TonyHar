@@ -5,7 +5,7 @@ import json
 from collections.abc import AsyncIterator, Sequence
 
 from tonyhar.resilience import ExecutionError, RunDeadlineExceeded
-from tonyhar.tooling import ToolExecutor, ToolRegistry, ToolRequest, ToolResult
+from tonyhar.tooling import ToolManager, ToolRequest, ToolResult
 
 from .intent_planner import ExecutionMode, IntentPlanner
 from .llm import BaseLLM, LLMResponse
@@ -22,7 +22,7 @@ from .runnables import (
 class Agent(AgentStateMachine):
     """无会话状态的 Agent 状态机。
 
-    ``Agent`` 只保存可复用的基础设施依赖：LLM、工具注册表、意图规划器
+    ``Agent`` 只保存可复用的基础设施依赖：LLM、工具管理器、意图规划器
     和最大步数；它不保存任何用户的消息、当前状态或上一次运行结果。因此，
     同一个 Agent 实例可以被多个会话并发使用。
 
@@ -50,18 +50,16 @@ class Agent(AgentStateMachine):
     def __init__(
         self,
         llm: BaseLLM,
-        tools: ToolRegistry,
+        tool_manager: ToolManager,
         intent_planner: IntentPlanner,
         max_steps: int = 10,
-        max_tool_concurrency: int = 4,
     ):
         if max_steps < 1:
             raise ValueError("max_steps 必须大于 0")
         self.llm = llm
-        self.tool_executor = ToolExecutor(
-            tools,
-            max_concurrency=max_tool_concurrency,
-        )
+        if not isinstance(tool_manager, ToolManager):
+            raise TypeError("tool_manager 必须是 ToolManager")
+        self.tool_manager = tool_manager
         self.intent_planner = intent_planner
         self.max_steps = max_steps
 
@@ -165,7 +163,7 @@ class Agent(AgentStateMachine):
                 )
                 response = await self.llm.chat(
                     messages=context.messages,
-                    tools=self.tool_executor.schemas(),
+                    tools=self.tool_manager.schemas(),
                     deadline=context.deadline,
                 )
                 yield self._event(
@@ -312,7 +310,7 @@ class Agent(AgentStateMachine):
                 arguments=request.arguments,
             )
 
-        results = await self.tool_executor.execute_many(
+        results = await self.tool_manager.execute_many(
             tool_requests,
             deadline=context.deadline,
         )

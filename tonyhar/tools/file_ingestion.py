@@ -142,22 +142,27 @@ class FileIngestionService:
         }
 
 
-def create_file_ingestion_tool(
-    scheduler: DocumentScheduler,
-) -> BaseTool:
-    """使用已装配的文档调度器创建文件入库工具。"""
-    service = FileIngestionService(scheduler)
+@tool(policy=ToolPolicy(timeout_seconds=60.0))
+class FileIngestionTool(BaseTool):
+    """解析用户消息中引用的本地文本文件并写入知识库。"""
 
-    @tool(policy=ToolPolicy(timeout_seconds=60.0))
-    async def file_ingestion(message: str) -> dict[str, Any]:
-        """解析用户消息中引用的本地文本文件并写入知识库。
+    name = "file_ingestion"
+    description = "解析用户消息中引用的本地文本文件并写入知识库。支持 .txt 和 .md 文件，也支持递归扫描目录。"
+    parameters = {
+        "type": "object",
+        "properties": {
+            "message": {
+                "type": "string",
+                "description": "包含本地文件或目录路径的完整用户消息。",
+            },
+        },
+        "required": ["message"],
+        "additionalProperties": False,
+    }
 
-        支持 .txt 和 .md 文件，也支持递归扫描目录。
+    def __init__(self, scheduler: DocumentScheduler):
+        self.service = FileIngestionService(scheduler)
 
-        Args:
-            message: 包含本地文件或目录路径的完整用户消息。
-        """
+    async def execute(self, message: str) -> dict[str, Any]:
         # 当前阶段显式隔离同步 RAG 流水线；下一阶段会迁移为独立 Workflow。
-        return await asyncio.to_thread(service.ingest, message)
-
-    return file_ingestion
+        return await asyncio.to_thread(self.service.ingest, message)

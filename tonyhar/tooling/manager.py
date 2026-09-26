@@ -1,37 +1,77 @@
-"""统一的异步工具执行入口。"""
+"""工具实例装配和异步运行时管理。"""
 
 from __future__ import annotations
 
 import asyncio
+import inspect
 import random
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from tonyhar.resilience import Deadline, RunDeadlineExceeded
 
-from .base import RetryableToolError
+from .base import BaseTool, RetryableToolError, ToolDefinition
 from .models import ToolRequest, ToolResult
-from .registry import ToolRegistry
+
+ToolFactory = Callable[[], BaseTool]
+ToolProvider = BaseTool | type[BaseTool] | ToolFactory
 
 
-class ToolExecutor:
-    """执行 ToolRequest 并统一应用超时、重试和并发限制。"""
+class ToolManager:
+    """构建、注册并执行全部业务工具。
+
+    ``ToolManager`` 是 Agent 访问工具的唯一边界。它在初始化时从工具实例、
+    ``BaseTool`` 类型或 factory 构建工具实例，之后统一提供缓存 Schema、
+    超时、重试、并发和批量执行能力。工具实例不会在每次请求中重复创建。
+    """
 
     def __init__(
         self,
-        tool_registry: ToolRegistry,
+        providers: Sequence[ToolProvider] = (),
         *,
         max_concurrency: int = 4,
     ) -> None:
-        if not isinstance(tool_registry, ToolRegistry):
-            raise TypeError("tool_registry 必须是 ToolRegistry")
         if max_concurrency < 1:
             raise ValueError("max_concurrency 必须大于 0")
-        self.registry = tool_registry
+        self._tools: dict[str, BaseTool] = {}
+        self._definitions: dict[str, ToolDefinition] = {}
+        self._schemas: tuple[dict, ...] = ()
         self._semaphore = asyncio.Semaphore(max_concurrency)
+        for provider in providers:
+            self.register(provider)
+
+    def register(self, provider: ToolProvider) -> BaseTool:
+        """构建并注册一个工具实例。"""
+        if isinstance(provider, BaseTool):
+            tool = provider
+        elif inspect.isclass(provider) and issubclass(provider, BaseTool):
+            tool = provider()
+        elif callable(provider):
+            tool = provider()
+        else:
+            raise TypeError("工具 provider 必须是 BaseTool、BaseTool 类型或 factory")
+        if not isinstance(tool, BaseTool):
+            raise TypeError("工具 provider 必须返回 BaseTool")
+        if tool.name in self._tools:
+            raise ValueError(f"工具名称重复: {tool.name}")
+        self._tools[tool.name] = tool
+        self._definitions[tool.definition.name] = tool.definition
+        self._schemas = tuple(
+            tool.to_schema() for tool in self._tools.values()
+        )
+        return tool
+
+    def register_many(self, *providers: ToolProvider) -> None:
+        """按传入顺序构建并注册多个工具实例。"""
+        for provider in providers:
+            self.register(provider)
+
+    def get(self, name: str) -> BaseTool | None:
+        return self._tools.get(name)
 
     def schemas(self) -> list[dict]:
-        return self.registry.schemas()
+        """返回缓存的 OpenAI Function Calling Schema。"""
+        return list(self._schemas)
 
     async def execute(
         self,
@@ -42,7 +82,7 @@ class ToolExecutor:
         if not isinstance(tool_request, ToolRequest):
             raise TypeError("tool_request 必须是 ToolRequest")
 
-        tool = self.registry.get(tool_request.name)
+        tool = self._tools.get(tool_request.name)
         if tool is None:
             return ToolResult(
                 name=tool_request.name,
@@ -134,7 +174,7 @@ class ToolExecutor:
                 results[index] = result
 
         for index, request in enumerate(tool_requests):
-            tool = self.registry.get(request.name)
+            tool = self._tools.get(request.name)
             if tool is not None and tool.policy.parallel_safe:
                 pending.append((index, request))
                 continue

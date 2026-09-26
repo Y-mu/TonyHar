@@ -1,6 +1,7 @@
 """列出知识库中文档的工具。"""
 
 import asyncio
+from typing import Any
 
 from tonyhar.tooling import BaseTool, ToolPolicy, tool
 
@@ -49,22 +50,30 @@ def format_knowledge_list(data: object) -> str:
     return "\n".join(lines)
 
 
-def create_knowledge_list_tool(
-    document_service: DocumentService,
-) -> BaseTool:
-    """使用已装配的文档服务创建知识库目录工具。"""
+@tool(
+    policy=ToolPolicy(
+        max_attempts=2,
+        idempotent=True,
+        parallel_safe=True,
+    ),
+)
+class KnowledgeListTool(BaseTool):
+    """列出知识库中已经入库的文档，不检索文档正文。"""
 
-    @tool(
-        policy=ToolPolicy(
-            max_attempts=2,
-            idempotent=True,
-            parallel_safe=True,
-        ),
-        result_formatter=format_knowledge_list,
-    )
-    async def knowledge_list() -> dict:
-        """列出知识库中已经入库的文档，不检索文档正文。"""
-        documents = await asyncio.to_thread(document_service.list_documents)
+    name = "knowledge_list"
+    description = "列出知识库中已经入库的文档，不检索文档正文。"
+    parameters: dict[str, Any] = {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    }
+
+    def __init__(self, document_service: DocumentService):
+        self.document_service = document_service
+
+    async def execute(self) -> dict:
+        documents = await asyncio.to_thread(self.document_service.list_documents)
         return {
             "count": len(documents),
             "documents": [
@@ -76,4 +85,5 @@ def create_knowledge_list_tool(
             ],
         }
 
-    return knowledge_list
+    def format_result(self, data: object) -> str | None:
+        return format_knowledge_list(data)

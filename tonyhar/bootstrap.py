@@ -19,11 +19,11 @@ from tonyhar.rag.parser import TxtParser
 from tonyhar.rag.retriever import Retriever
 from tonyhar.rag.scheduler import DocumentScheduler
 from tonyhar.rag.splitter import HybridSplitter, SplitterConfig
-from tonyhar.tooling import ToolRegistry
-from tonyhar.tools.calculator import calculator
-from tonyhar.tools.file_ingestion import create_file_ingestion_tool
-from tonyhar.tools.knowledge_list import create_knowledge_list_tool
-from tonyhar.tools.knowledge_search import create_knowledge_search_tool
+from tonyhar.tooling import ToolManager
+from tonyhar.tools.calculator import CalculatorTool
+from tonyhar.tools.file_ingestion import FileIngestionTool
+from tonyhar.tools.knowledge_list import KnowledgeListTool
+from tonyhar.tools.knowledge_search import KnowledgeSearchTool
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -53,17 +53,18 @@ def build_agent() -> Agent:
         document_service=document_service,
     )
 
-    registry = ToolRegistry()
-    registry.register_many(
-        calculator,
-        create_file_ingestion_tool(scheduler),
-        create_knowledge_list_tool(document_service),
-        create_knowledge_search_tool(retriever),
+    tool_manager = ToolManager(
+        providers=[
+            CalculatorTool,
+            lambda: FileIngestionTool(scheduler),
+            lambda: KnowledgeListTool(document_service),
+            lambda: KnowledgeSearchTool(retriever),
+        ],
     )
 
     return Agent(
         llm=llm,
-        tools=registry,
+        tool_manager=tool_manager,
         intent_planner=IntentPlanner(get_shared_intent_recognizer()),
     )
 
