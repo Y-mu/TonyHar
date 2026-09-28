@@ -69,9 +69,16 @@ class ToolManager:
     def get(self, name: str) -> BaseTool | None:
         return self._tools.get(name)
 
-    def schemas(self) -> list[dict]:
-        """返回缓存的 OpenAI Function Calling Schema。"""
-        return list(self._schemas)
+    def schemas(self, allowed_names: Sequence[str] | None = None) -> list[dict]:
+        """返回全部或本轮明确允许的 Function Calling Schema。"""
+        if allowed_names is None:
+            return list(self._schemas)
+        allowed = set(allowed_names)
+        return [
+            schema
+            for schema in self._schemas
+            if schema["function"]["name"] in allowed
+        ]
 
     async def execute(
         self,

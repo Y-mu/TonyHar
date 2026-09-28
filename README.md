@@ -17,16 +17,18 @@ CLI / FastAPI + SSE
 ChatService
     ├── SessionStore + session lock
     └── Agent.stream(context)
-            ├── IntentPlanner
-            ├── Deadline → AsyncOpenAI / DeepSeekLLM
-            └── ToolManager
-                    └── ToolRequest → ToolResult
+            ├── RunDispatcher → RunHandler
+            ├── AgentLoop → AsyncOpenAI / DeepSeekLLM
+            └── ToolRunner → ToolManager
+                              └── ToolRequest → ToolResult
 ```
 
 ### Agent 与会话
 
 - `AgentRunContext` 保存单次运行状态。
-- `AgentState` 管理规划、模型调用、工具执行和终态转换。
+- `AgentState` 管理请求分派、模型调用、工具执行和终态转换。
+- `RunDispatcher` 只把意图分类结果映射为直接工具、检索后生成或普通 Agent 三种策略。
+- 三种 `RunHandler` 承担策略执行，`AgentLoop` 只处理 LLM 与模型发起的 Tool 循环。
 - `AgentEvent` 描述运行过程，可直接转发到 SSE 或 WebSocket。
 - `AgentResult` 表示一次运行的最终结果。
 - `ChatService` 负责会话加载、会话级串行化和消息持久化。
@@ -52,8 +54,9 @@ ChatService
   装饰器不修改全局 Manager。
 - URL 正文工具在 Trafilatura 提取后统一规范 Unicode、空白和软换行，同时保留
   Markdown 标题、列表、表格及代码块结构，便于后续文档切块。
-- Agent 通过 `ToolManager.schemas()` 将全部工具 Schema 传给模型，通过
-  `ToolManager.execute()` 执行模型返回的 `ToolRequest`。
+- `RunDispatcher` 为普通 Agent 请求声明本轮模型可见的只读 Tool；`AgentLoop`
+  通过 `ToolManager.schemas(allowed_names)` 只发送允许的 Schema，并拒绝越权调用。
+- 所有 Tool 都只通过 `ToolManager.execute()` 执行模型或 Handler 产生的 `ToolRequest`。
 
 正式错误码区分 `run_timeout`、`model_timeout`、
 `model_rate_limited`、`model_unavailable`、`model_circuit_open`、

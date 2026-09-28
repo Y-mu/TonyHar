@@ -11,7 +11,7 @@ from tonyhar.tooling import ToolRequest
 
 class AgentState(str, Enum):
     CREATED = "created"
-    PLANNING = "planning"
+    DISPATCHING = "dispatching"
     CALLING_MODEL = "calling_model"
     EXECUTING_TOOLS = "executing_tools"
     COMPLETED = "completed"
@@ -21,11 +21,11 @@ class AgentState(str, Enum):
 # 合法状态转换校验
 _ALLOWED_TRANSITIONS: dict[AgentState, frozenset[AgentState]] = {
     AgentState.CREATED: frozenset({
-        AgentState.PLANNING,
+        AgentState.DISPATCHING,
         AgentState.FAILED,
         AgentState.CANCELLED,
     }),
-    AgentState.PLANNING: frozenset({
+    AgentState.DISPATCHING: frozenset({
         AgentState.CALLING_MODEL,
         AgentState.EXECUTING_TOOLS,
         AgentState.COMPLETED,
@@ -101,7 +101,7 @@ class AgentRunContext:
 
 class AgentEventType(str, Enum):
     RUN_STARTED = "run_started"
-    INTENT_PLANNED = "intent_planned"
+    RUN_DISPATCHED = "run_dispatched"
     MODEL_STARTED = "model_started"
     TEXT_DELTA = "text_delta"
     MODEL_COMPLETED = "model_completed"

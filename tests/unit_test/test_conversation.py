@@ -35,7 +35,7 @@ class RecordingAgent:
         self.max_active_total = max(self.max_active_total, self.active_total)
 
         try:
-            context.transition_to(AgentState.PLANNING)
+            context.transition_to(AgentState.DISPATCHING)
             context.add_message("user", context.user_input)
             if self.delay:
                 await asyncio.sleep(self.delay)

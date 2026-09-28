@@ -108,6 +108,16 @@ class ToolManagerTest(unittest.IsolatedAsyncioTestCase):
             "echo",
         )
 
+    async def test_manager_filters_model_visible_schemas(self):
+        self.assertEqual(
+            [
+                schema["function"]["name"]
+                for schema in self.manager.schemas(["echo"])
+            ],
+            ["echo"],
+        )
+        self.assertEqual(self.manager.schemas([]), [])
+
     async def test_tool_decorator_declares_class_schema(self):
         manager = ToolManager([DecoratedSearchTool])
         decorated_search = manager.get("decorated_search")

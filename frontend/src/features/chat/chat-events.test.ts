@@ -13,6 +13,15 @@ function event(type: AgentEvent["type"], data: Record<string, unknown>) {
 }
 
 describe("applyAgentEvent", () => {
+  it("shows the dispatched run state", () => {
+    const dispatched = applyAgentEvent(
+      initialRunViewState,
+      event("run_dispatched", { route_name: "chat", mode: "agent" }),
+    );
+
+    expect(dispatched.label).toBe("已理解问题，正在选择执行方式");
+  });
+
   it("tracks tool lifecycle", () => {
     const running = applyAgentEvent(
       initialRunViewState,

@@ -5,7 +5,7 @@ import type { AgentEvent, AgentEventType } from "./types";
 
 const EVENT_TYPES = new Set<AgentEventType>([
   "run_started",
-  "intent_planned",
+  "run_dispatched",
   "model_started",
   "text_delta",
   "model_completed",

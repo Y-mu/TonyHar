@@ -40,8 +40,8 @@ export function applyAgentEvent(
         answer: null,
         terminal: false,
       };
-    case "intent_planned":
-      return { ...state, label: "已理解问题，正在规划回答" };
+    case "run_dispatched":
+      return { ...state, label: "已理解问题，正在选择执行方式" };
     case "model_started":
       return { ...state, label: "正在思考" };
     case "text_delta":

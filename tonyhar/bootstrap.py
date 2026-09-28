@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 
 from tonyhar.agent import Agent
-from tonyhar.agent.intent_planner import IntentPlanner
+from tonyhar.agent.dispatcher import RunDispatcher
 from tonyhar.agent.llm import DeepSeekLLM
 from tonyhar.agent.user_intent_recognizer import (
     get_shared_intent_recognizer,
@@ -70,7 +70,7 @@ def build_agent() -> Agent:
     return Agent(
         llm=llm,
         tool_manager=tool_manager,
-        intent_planner=IntentPlanner(get_shared_intent_recognizer()),
+        run_dispatcher=RunDispatcher(get_shared_intent_recognizer()),
     )
 
 

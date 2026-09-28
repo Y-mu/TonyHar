@@ -1,4 +1,4 @@
-"""Agent 运行时、模型端口和意图规划。"""
+"""Agent 运行门面、请求分派和模型循环。"""
 
 from .runtime import Agent
 

@@ -2,7 +2,7 @@ import unittest
 import asyncio
 
 from tonyhar.agent import Agent
-from tonyhar.agent.intent_planner import IntentPlanner
+from tonyhar.agent.dispatcher import RunDispatcher
 from tonyhar.agent.llm import (
     BaseLLM,
     LLMCompleted,
@@ -54,13 +54,13 @@ class AgentRunnablesTest(unittest.TestCase):
         context.messages[0]["content"] = "changed"
         self.assertEqual(source_messages[0]["content"], "test")
 
-        context.transition_to(AgentState.PLANNING)
+        context.transition_to(AgentState.DISPATCHING)
         context.transition_to(AgentState.CALLING_MODEL)
         context.transition_to(AgentState.COMPLETED)
         self.assertIs(context.state, AgentState.COMPLETED)
 
         with self.assertRaisesRegex(ValueError, "非法 Agent 状态转换"):
-            context.transition_to(AgentState.PLANNING)
+            context.transition_to(AgentState.DISPATCHING)
 
     def test_event_and_result_are_structured_protocols(self):
         event = AgentEvent(
@@ -84,7 +84,7 @@ class AgentRunnablesTest(unittest.TestCase):
             agent = Agent(
                 llm=EventLLM(),
                 tool_manager=ToolManager(),
-                intent_planner=IntentPlanner(ChatRecognizer()),
+                run_dispatcher=RunDispatcher(ChatRecognizer()),
             )
             context = AgentRunContext(
                 run_id="run-stream",
@@ -101,7 +101,7 @@ class AgentRunnablesTest(unittest.TestCase):
             [event.type for event in events],
             [
                 AgentEventType.RUN_STARTED,
-                AgentEventType.INTENT_PLANNED,
+                AgentEventType.RUN_DISPATCHED,
                 AgentEventType.MODEL_STARTED,
                 AgentEventType.TEXT_DELTA,
                 AgentEventType.TEXT_DELTA,

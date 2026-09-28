@@ -2,7 +2,7 @@ import json
 import unittest
 
 from tonyhar.agent import Agent
-from tonyhar.agent.intent_planner import ExecutionMode, IntentPlan, IntentPlanner
+from tonyhar.agent.dispatcher import RunCommand, RunDispatcher, RunKind
 from tonyhar.agent.llm import (
     BaseLLM,
     LLMCompleted,
@@ -112,6 +112,19 @@ class ThinkingToolLLM(TestLLM):
         yield LLMCompleted(response=LLMResponse(content="工具调用完成"))
 
 
+class UnauthorizedToolLLM(TestLLM):
+    async def stream(self, messages, tools, *, deadline):
+        yield LLMCompleted(
+            response=LLMResponse(
+                tool_calls=[ToolRequest(
+                    tool_call_id="call-forbidden",
+                    name="file_ingestion",
+                    arguments={"message": "导入文件"},
+                )],
+            )
+        )
+
+
 class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def context(user_input: str) -> AgentRunContext:
@@ -123,21 +136,21 @@ class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):
             deadline=Deadline.after(1),
         )
 
-    async def test_intent_route_returns_tool_request_without_executing_it(self):
+    async def test_dispatcher_returns_tool_request_without_executing_it(self):
         tool_manager = ToolManager([RecordingListTool])
         agent = Agent(
             llm=UnexpectedLLM(),
             tool_manager=tool_manager,
-            intent_planner=IntentPlanner(KnowledgeListRecognizer()),
+            run_dispatcher=RunDispatcher(KnowledgeListRecognizer()),
         )
 
-        direct_answer = agent.intent_planner.plan("列出文档")
+        command = agent.run_dispatcher.dispatch("列出文档")
 
-        self.assertIsInstance(direct_answer, IntentPlan)
-        self.assertIs(direct_answer.mode, ExecutionMode.DIRECT_TOOL)
-        self.assertEqual(len(direct_answer.tool_calls), 1)
-        self.assertIsInstance(direct_answer.tool_calls[0], ToolRequest)
-        self.assertEqual(direct_answer.tool_calls[0].name, "knowledge_list")
+        self.assertIsInstance(command, RunCommand)
+        self.assertIs(command.kind, RunKind.DIRECT_TOOL)
+        self.assertEqual(len(command.tool_requests), 1)
+        self.assertIsInstance(command.tool_requests[0], ToolRequest)
+        self.assertEqual(command.tool_requests[0].name, "knowledge_list")
 
     async def test_knowledge_query_searches_before_llm_generation(self):
         search = RecordingSearchTool()
@@ -146,7 +159,7 @@ class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):
         agent = Agent(
             llm=llm,
             tool_manager=tool_manager,
-            intent_planner=IntentPlanner(KnowledgeQueryRecognizer()),
+            run_dispatcher=RunDispatcher(KnowledgeQueryRecognizer()),
         )
 
         context = self.context("文档中的维修建议是什么？")
@@ -158,7 +171,7 @@ class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(search.queries, [("文档中的维修建议是什么？", 5)])
         self.assertEqual(
             [schema["function"]["name"] for schema in llm.tools],
-            ["knowledge_search"],
+            [],
         )
         self.assertEqual(llm.messages[-2]["role"], "assistant")
         self.assertEqual(llm.messages[-1]["role"], "tool")
@@ -169,7 +182,7 @@ class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):
         agent = Agent(
             llm=FailingLLM(),
             tool_manager=ToolManager(),
-            intent_planner=IntentPlanner(ChatRecognizer()),
+            run_dispatcher=RunDispatcher(ChatRecognizer()),
         )
         context = self.context("你好")
 
@@ -186,7 +199,7 @@ class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):
         agent = Agent(
             llm=UnexpectedLLM(),
             tool_manager=tool_manager,
-            intent_planner=IntentPlanner(KnowledgeListRecognizer()),
+            run_dispatcher=RunDispatcher(KnowledgeListRecognizer()),
         )
 
         context = self.context("列出文档")
@@ -205,7 +218,7 @@ class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):
         agent = Agent(
             llm=DeadlineLLM(),
             tool_manager=ToolManager(),
-            intent_planner=IntentPlanner(ChatRecognizer()),
+            run_dispatcher=RunDispatcher(ChatRecognizer()),
         )
 
         result = await agent.invoke(self.context("你好"))
@@ -220,7 +233,7 @@ class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):
         agent = Agent(
             llm=llm,
             tool_manager=tool_manager,
-            intent_planner=IntentPlanner(ChatRecognizer()),
+            run_dispatcher=RunDispatcher(ChatRecognizer()),
         )
 
         context = self.context("请调用工具")
@@ -234,6 +247,19 @@ class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):
             "需要调用知识列表工具",
         )
         self.assertEqual(assistant_message["tool_calls"][0]["id"], "call-1")
+
+    async def test_agent_rejects_tool_not_allowed_by_dispatched_run(self):
+        agent = Agent(
+            llm=UnauthorizedToolLLM(),
+            tool_manager=ToolManager(),
+            run_dispatcher=RunDispatcher(ChatRecognizer()),
+        )
+
+        result = await agent.invoke(self.context("普通对话"))
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error_code, "model_response_error")
+        self.assertIn("未授权工具", result.error_message)
 
 
 if __name__ == "__main__":

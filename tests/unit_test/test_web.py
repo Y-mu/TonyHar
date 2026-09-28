@@ -32,7 +32,7 @@ class WebTestAgent:
             data={"state": context.state.value, "step": 1, "delta": "answer:"},
         )
 
-        context.transition_to(AgentState.PLANNING)
+        context.transition_to(AgentState.DISPATCHING)
         context.add_message("user", context.user_input)
         answer = f"answer:{context.user_input}"
         context.add_message("assistant", answer)
