@@ -37,6 +37,7 @@ class AgentLoop:
         *,
         allowed_tool_names: tuple[str, ...],
     ) -> AsyncIterator[AgentEvent]:
+        
         context.transition_to(AgentState.CALLING_MODEL)
         for step in range(1, self.max_steps + 1):
             context.step = step

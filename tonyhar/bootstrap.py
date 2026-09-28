@@ -25,6 +25,7 @@ from tonyhar.tools.calculator import CalculatorTool
 from tonyhar.tools.file_ingestion import FileIngestionService, FileIngestionTool
 from tonyhar.tools.knowledge_list import KnowledgeListTool
 from tonyhar.tools.knowledge_search import KnowledgeSearchTool
+from tonyhar.tools.spider_url import GetUrlTool
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -64,6 +65,7 @@ def build_agent() -> Agent:
             lambda: FileIngestionTool(file_ingestion),
             lambda: KnowledgeListTool(document_service),
             lambda: KnowledgeSearchTool(retriever),
+            GetUrlTool,
         ],
     )
 

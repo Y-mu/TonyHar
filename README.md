@@ -56,6 +56,8 @@ ChatService
   Markdown 标题、列表、表格及代码块结构，便于后续文档切块。
 - `RunDispatcher` 为普通 Agent 请求声明本轮模型可见的只读 Tool；`AgentLoop`
   通过 `ToolManager.schemas(allowed_names)` 只发送允许的 Schema，并拒绝越权调用。
+- `spider_url` 是由 `RunDispatcher` 确定性路由的直接工具：路由层从用户指令提取并校验
+  HTTP(S) URL，再生成 `ToolRequest`；它不作为普通 Agent 的模型工具暴露。
 - 所有 Tool 都只通过 `ToolManager.execute()` 执行模型或 Handler 产生的 `ToolRequest`。
 
 正式错误码区分 `run_timeout`、`model_timeout`、

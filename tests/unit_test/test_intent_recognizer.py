@@ -69,6 +69,11 @@ class UserIntentRecognizerTest(unittest.TestCase):
         self.assertIn("请把 manual.txt 导入知识库", utterances)
         self.assertTrue(any("/path/" in item for item in utterances))
 
+    def test_spider_url_corpus_contains_http_url_expressions(self):
+        utterances = DEFAULT_INTENT_ROUTER_CONFIG.utterances["spider_url"]
+
+        self.assertTrue(any("https://" in item for item in utterances))
+
 
 if __name__ == "__main__":
     unittest.main()

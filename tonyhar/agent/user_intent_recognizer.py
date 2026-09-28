@@ -58,6 +58,14 @@ ROUTE_UTTERANCES: Mapping[str, tuple[str, ...]] = MappingProxyType({
         "查询文档中关于发动机漏水的内容",
         "文档里的维修建议是什么",
     ),
+    # 网页正文抓取：必须从用户指令中提取一个 HTTP(S) URL。
+    "spider_url": (
+        "抓取这个网页 https://example.com",
+        "读取这个网址的正文 https://example.com/article",
+        "爬取 URL https://example.com",
+        "提取网页内容并返回 https://example.com",
+        "帮我看看这个链接的内容 https://example.com",
+    ),
     # 普通对话：不要求访问知识库的问候、计算或通用问题。
     "chat": (
         "你好",
@@ -74,6 +82,7 @@ DEFAULT_ROUTE_THRESHOLDS: Mapping[str, float] = MappingProxyType({
     "ingest": 0.65,  # 防止删除、修改等操作被误判为文件入库
     "knowledge_list": 0.65,  # 防止无意义短文本被误判为查询文档列表
     "knowledge_query": 0.55,  # 知识问答表达较多样，因此使用稍低阈值
+    "spider_url": 0.65,  # 防止普通链接讨论被误判为抓取请求
     "chat": 0.55,  # 保留正常通用问题，同时拒绝明显无关输入
 })
 

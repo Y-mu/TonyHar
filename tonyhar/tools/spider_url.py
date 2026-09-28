@@ -217,6 +217,10 @@ class GetUrlTool(BaseTool):
 
         return cleaned_markdown
 
+    def format_result(self, data: object) -> str | None:
+        """直接路由时展示清洗后的 Markdown，而不是 JSON 字符串字面量。"""
+        return data if isinstance(data, str) else None
+
 
 if __name__ == "__main__":
     async def main():

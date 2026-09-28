@@ -2,12 +2,18 @@
 
 from dataclasses import dataclass
 from enum import Enum
+import re
 from typing import Protocol
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from tonyhar.tooling import ToolRequest
 
 from .user_intent_recognizer import IntentResult
+
+
+_URL_PATTERN = re.compile(r"https?://[^\s<>\"'）】》]+", re.IGNORECASE)
+_URL_TRAILING_PUNCTUATION = "，。！？、；：,.!?;:)]}>'\""
 
 
 class IntentRecognizer(Protocol):
@@ -40,6 +46,19 @@ class RunDispatcher:
 
     def dispatch(self, user_input: str) -> RunCommand:
         intent = self.recognizer.classify(user_input)
+
+        if intent.name == "spider_url":
+            url = self._extract_url(user_input)
+            return RunCommand(
+                kind=RunKind.DIRECT_TOOL,
+                route_name=intent.name,
+                confidence=intent.score,
+                tool_requests=(ToolRequest(
+                    name="spider_url",
+                    arguments={"url": url},
+                    tool_call_id=f"routed_spider_url_{uuid4().hex}",
+                ),),
+            )
 
         if intent.name == "knowledge_list":
             return RunCommand(
@@ -86,3 +105,16 @@ class RunDispatcher:
                 "knowledge_search",
             ),
         )
+
+    @staticmethod
+    def _extract_url(user_input: str) -> str:
+        """从用户指令中提取并校验一个 HTTP(S) URL。"""
+        match = _URL_PATTERN.search(user_input)
+        if match is None:
+            raise ValueError("抓取网页需要提供 http 或 https URL")
+
+        url = match.group(0).rstrip(_URL_TRAILING_PUNCTUATION)
+        parsed = urlsplit(url)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("网页地址必须是有效的 http 或 https URL")
+        return url

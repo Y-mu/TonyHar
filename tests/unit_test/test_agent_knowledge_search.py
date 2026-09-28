@@ -26,6 +26,11 @@ class KnowledgeListRecognizer:
         return IntentResult(name="knowledge_list", score=0.9)
 
 
+class SpiderUrlRecognizer:
+    def classify(self, text):
+        return IntentResult(name="spider_url", score=0.9)
+
+
 class ChatRecognizer:
     def classify(self, text):
         return IntentResult(name="chat", score=0.9)
@@ -54,6 +59,22 @@ class RecordingListTool(BaseTool):
 
     def format_result(self, data):
         return format_knowledge_list(data)
+
+
+class RecordingSpiderTool(BaseTool):
+    name = "spider_url"
+    description = "test spider"
+    parameters = {"type": "object", "properties": {"url": {"type": "string"}}}
+
+    def __init__(self):
+        self.urls = []
+
+    async def execute(self, url):
+        self.urls.append(url)
+        return "# 抓取结果\n\n网页正文"
+
+    def format_result(self, data):
+        return data
 
 
 class TestLLM(BaseLLM):
@@ -136,6 +157,21 @@ class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):
             deadline=Deadline.after(1),
         )
 
+    def test_spider_url_dispatcher_extracts_and_validates_url(self):
+        dispatcher = RunDispatcher(SpiderUrlRecognizer())
+
+        command = dispatcher.dispatch("请抓取 https://example.com/article。")
+
+        self.assertIs(command.kind, RunKind.DIRECT_TOOL)
+        self.assertEqual(command.tool_requests[0].name, "spider_url")
+        self.assertEqual(
+            command.tool_requests[0].arguments,
+            {"url": "https://example.com/article"},
+        )
+
+        with self.assertRaisesRegex(ValueError, "需要提供"):
+            dispatcher.dispatch("请抓取这个网页")
+
     async def test_dispatcher_returns_tool_request_without_executing_it(self):
         tool_manager = ToolManager([RecordingListTool])
         agent = Agent(
@@ -212,6 +248,22 @@ class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):
             "当前共有 **1** 篇已入库文档：\n\n"
             "1. `manual.txt`",
         )
+        self.assertIs(context.state, AgentState.COMPLETED)
+
+    async def test_spider_url_route_extracts_url_and_returns_direct_result(self):
+        spider = RecordingSpiderTool()
+        agent = Agent(
+            llm=UnexpectedLLM(),
+            tool_manager=ToolManager([lambda: spider]),
+            run_dispatcher=RunDispatcher(SpiderUrlRecognizer()),
+        )
+
+        context = self.context("请抓取 https://example.com/article。")
+        result = await agent.invoke(context)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.answer, "# 抓取结果\n\n网页正文")
+        self.assertEqual(spider.urls, ["https://example.com/article"])
         self.assertIs(context.state, AgentState.COMPLETED)
 
     async def test_run_deadline_has_stable_terminal_error_code(self):
