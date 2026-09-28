@@ -15,13 +15,14 @@ from tonyhar.agent.user_intent_recognizer import (
 from tonyhar.conversation import ChatService, InMemorySessionStore
 from tonyhar.rag.chroma_store_imp import ChromaStoreImp
 from tonyhar.rag.document_service import DocumentService
+from tonyhar.rag.file_reader import FileTextReader
 from tonyhar.rag.parser import TxtParser
 from tonyhar.rag.retriever import Retriever
-from tonyhar.rag.scheduler import DocumentScheduler
 from tonyhar.rag.splitter import HybridSplitter, SplitterConfig
+from tonyhar.rag.text_ingestion import TextIngestionService
 from tonyhar.tooling import ToolManager
 from tonyhar.tools.calculator import CalculatorTool
-from tonyhar.tools.file_ingestion import FileIngestionTool
+from tonyhar.tools.file_ingestion import FileIngestionService, FileIngestionTool
 from tonyhar.tools.knowledge_list import KnowledgeListTool
 from tonyhar.tools.knowledge_search import KnowledgeSearchTool
 
@@ -45,18 +46,22 @@ def build_agent() -> Agent:
     )
     document_service = DocumentService(store)
     retriever = Retriever(store)
-    scheduler = DocumentScheduler(
-        parser=TxtParser(),
-        splitter=HybridSplitter(
-            config=SplitterConfig(chunk_size=512, chunk_overlap=64)
-        ),
+    splitter = HybridSplitter(
+        config=SplitterConfig(chunk_size=512, chunk_overlap=64)
+    )
+    text_ingestion = TextIngestionService(
+        splitter=splitter,
         document_service=document_service,
+    )
+    file_ingestion = FileIngestionService(
+        reader=FileTextReader(TxtParser()),
+        text_ingestion=text_ingestion,
     )
 
     tool_manager = ToolManager(
         providers=[
             CalculatorTool,
-            lambda: FileIngestionTool(scheduler),
+            lambda: FileIngestionTool(file_ingestion),
             lambda: KnowledgeListTool(document_service),
             lambda: KnowledgeSearchTool(retriever),
         ],

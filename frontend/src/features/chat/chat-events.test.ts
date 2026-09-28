@@ -53,4 +53,16 @@ describe("applyAgentEvent", () => {
     );
     expect(failed).toMatchObject({ error: "模型不可用", terminal: true });
   });
+
+  it("shows text generation while deltas arrive", () => {
+    const streaming = applyAgentEvent(
+      initialRunViewState,
+      event("text_delta", { delta: "你" }),
+    );
+
+    expect(streaming).toMatchObject({
+      label: "正在生成回答",
+      terminal: false,
+    });
+  });
 });

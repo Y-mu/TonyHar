@@ -4,7 +4,7 @@ import { Menu, MessageSquarePlus, RefreshCw, X } from "lucide-react";
 import { createSession, getSession } from "./api/sessions";
 import type { SessionMessage } from "./api/types";
 import { ChatErrorBoundary } from "./features/chat/ChatErrorBoundary";
-import { ChatRuntime, type UiMessage } from "./features/chat/ChatRuntime";
+import { ChatRuntime } from "./features/chat/ChatRuntime";
 import { initialRunViewState, type RunViewState } from "./features/chat/chat-events";
 import {
   loadSessionRegistry,
@@ -81,17 +81,16 @@ export function App() {
     [sessionId, sessions],
   );
 
-  const handleMessagesChange = useCallback((messages: UiMessage[]) => {
+  const handleMessageSent = useCallback((message: string) => {
     if (!sessionId) return;
-    const firstUserMessage = messages.find((message) => message.role === "user");
     setSessions((current) => {
       const currentItem = current.find((item) => item.id === sessionId);
       const next = current.map((item) =>
         item.id === sessionId
           ? {
               ...item,
-              title: currentItem?.title === "新对话" && firstUserMessage
-                ? titleFromMessage(firstUserMessage.content)
+              title: currentItem?.title === "新对话"
+                ? titleFromMessage(message)
                 : item.title,
               updatedAt: new Date().toISOString(),
             }
@@ -187,7 +186,7 @@ export function App() {
                 sessionId={sessionId}
                 initialMessages={initialMessages}
                 onRunStateChange={setRunView}
-                onMessagesChange={handleMessagesChange}
+                onMessageSent={handleMessageSent}
               />
             </ChatErrorBoundary>
           )}

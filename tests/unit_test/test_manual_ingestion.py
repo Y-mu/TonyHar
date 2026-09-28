@@ -5,11 +5,12 @@ from pathlib import Path
 from typing import Sequence
 
 from tonyhar.rag.document_service import DocumentService
+from tonyhar.rag.file_reader import FileTextReader
 from tonyhar.rag.parser import TxtParser
-from tonyhar.rag.pipeline_context import PipelineContext
-from tonyhar.rag.scheduler import DocumentScheduler
 from tonyhar.rag.splitter import HybridSplitter, SplitterConfig
+from tonyhar.rag.text_ingestion import TextIngestionService
 from tonyhar.rag.vector_store_base import Chunk, DocumentSummary, VectorStore
+from tonyhar.tools.file_ingestion import FileIngestionService
 
 
 class MemoryVectorStore(VectorStore):
@@ -47,6 +48,15 @@ class MemoryVectorStore(VectorStore):
 
 
 class ManualIngestionTest(unittest.TestCase):
+    @staticmethod
+    def text_ingestion(store: MemoryVectorStore) -> TextIngestionService:
+        return TextIngestionService(
+            splitter=HybridSplitter(
+                config=SplitterConfig(chunk_size=128, chunk_overlap=16)
+            ),
+            document_service=DocumentService(store),
+        )
+
     def test_normalize_metadata_removes_empty_values(self):
         result = DocumentService.normalize_metadata({
             "none": None,
@@ -64,7 +74,43 @@ class ManualIngestionTest(unittest.TestCase):
             "value": ["heading"],
         })
 
-    def test_manual_txt_is_parsed_and_stored(self):
+    def test_file_reader_parses_file_and_returns_text(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manual_path = Path(temp_dir) / "manual.txt"
+            manual_path.write_bytes("发动机检查步骤。".encode("gb18030"))
+
+            text = FileTextReader(TxtParser()).read(manual_path)
+
+            self.assertEqual(text, "发动机检查步骤。")
+
+    def test_text_is_chunked_and_stored_without_file_dependency(self):
+        store = MemoryVectorStore()
+        service = self.text_ingestion(store)
+
+        context = service.ingest(
+            "发动机检查步骤。" * 300,
+            document_id="web-document-id",
+            filename="article.md",
+            metadata={
+                "source_type": "web",
+                "source_url": "https://example.com/article",
+            },
+        )
+
+        self.assertEqual(context.progress, 1.0)
+        self.assertEqual(context.errors, [])
+        self.assertGreater(len(context.chunks), 1)
+        self.assertEqual(len(context.chunks), len(store.chunks))
+        for chunk in context.chunks:
+            self.assertEqual(chunk.document_id, "web-document-id")
+            self.assertEqual(chunk.filename, "article.md")
+            self.assertEqual(chunk.metadata["source_type"], "web")
+            self.assertEqual(
+                chunk.metadata["source_url"],
+                "https://example.com/article",
+            )
+
+    def test_file_ingestion_composes_reader_and_text_ingestion(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             manual_path = Path(temp_dir) / "manual.txt"
             manual_path.write_text(
@@ -73,37 +119,26 @@ class ManualIngestionTest(unittest.TestCase):
             )
 
             store = MemoryVectorStore()
-            scheduler = DocumentScheduler(
-                parser=TxtParser(),
-                splitter=HybridSplitter(
-                    config=SplitterConfig(chunk_size=128, chunk_overlap=16)
-                ),
-                document_service=DocumentService(store),
+            service = FileIngestionService(
+                reader=FileTextReader(TxtParser()),
+                text_ingestion=self.text_ingestion(store),
             )
 
             document_id = hashlib.sha1(
                 str(manual_path.resolve()).encode("utf-8")
             ).hexdigest()
-            context = PipelineContext(
-                document_id=document_id,
-                filename=manual_path.name,
-                binary=manual_path.read_bytes(),
-            )
+            result = service.ingest(f"请导入 {manual_path}")
 
-            result = scheduler.run(context)
-
-            self.assertIs(result, context)
-            self.assertEqual(context.progress, 1.0)
-            self.assertEqual(context.errors, [])
-            self.assertGreater(len(context.chunks), 1)
-            self.assertEqual(len(context.chunks), len(store.chunks))
-
-            for chunk in context.chunks:
+            self.assertTrue(result["success"])
+            self.assertEqual(result["files"][0]["document_id"], document_id)
+            self.assertGreater(result["files"][0]["chunk_count"], 1)
+            for chunk in store.chunks.values():
                 self.assertEqual(chunk.document_id, document_id)
                 self.assertEqual(chunk.filename, "manual.txt")
                 self.assertTrue(chunk.text.strip())
                 self.assertEqual(chunk.metadata["document_id"], document_id)
                 self.assertEqual(chunk.metadata["filename"], "manual.txt")
+                self.assertEqual(chunk.metadata["source_type"], "file")
 
 
 if __name__ == "__main__":

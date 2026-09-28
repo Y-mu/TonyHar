@@ -2,6 +2,7 @@ export type AgentEventType =
   | "run_started"
   | "intent_planned"
   | "model_started"
+  | "text_delta"
   | "model_completed"
   | "tool_started"
   | "tool_completed"

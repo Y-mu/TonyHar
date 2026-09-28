@@ -3,7 +3,12 @@ import unittest
 
 from tonyhar.agent import Agent
 from tonyhar.agent.intent_planner import ExecutionMode, IntentPlan, IntentPlanner
-from tonyhar.agent.llm import BaseLLM, LLMResponse, ModelUnavailableError
+from tonyhar.agent.llm import (
+    BaseLLM,
+    LLMCompleted,
+    LLMResponse,
+    ModelUnavailableError,
+)
 from tonyhar.agent.runnables import AgentRunContext, AgentState
 from tonyhar.agent.user_intent_recognizer import IntentResult
 from tonyhar.resilience import Deadline, RunDeadlineExceeded
@@ -61,42 +66,50 @@ class RecordingLLM(TestLLM):
         self.messages = None
         self.tools = None
 
-    async def chat(self, messages, tools, *, deadline):
+    async def stream(self, messages, tools, *, deadline):
         self.messages = list(messages)
         self.tools = list(tools)
-        return LLMResponse(content="根据检索证据作答")
+        yield LLMCompleted(
+            response=LLMResponse(content="根据检索证据作答")
+        )
 
 
 class UnexpectedLLM(TestLLM):
-    async def chat(self, messages, tools, *, deadline):
+    async def stream(self, messages, tools, *, deadline):
         raise AssertionError("确定性路由不应继续调用 LLM")
+        yield
 
 
 class FailingLLM(TestLLM):
-    async def chat(self, messages, tools, *, deadline):
+    async def stream(self, messages, tools, *, deadline):
         raise ModelUnavailableError("model unavailable")
+        yield
 
 
 class DeadlineLLM(TestLLM):
-    async def chat(self, messages, tools, *, deadline):
+    async def stream(self, messages, tools, *, deadline):
         raise RunDeadlineExceeded()
+        yield
 
 
 class ThinkingToolLLM(TestLLM):
     def __init__(self):
         self.calls = []
 
-    async def chat(self, messages, tools, *, deadline):
+    async def stream(self, messages, tools, *, deadline):
         self.calls.append(list(messages))
         if len(self.calls) == 1:
-            return LLMResponse(
-                reasoning_content="需要调用知识列表工具",
-                tool_calls=[ToolRequest(
-                    tool_call_id="call-1",
-                    name="knowledge_list",
-                )],
+            yield LLMCompleted(
+                response=LLMResponse(
+                    reasoning_content="需要调用知识列表工具",
+                    tool_calls=[ToolRequest(
+                        tool_call_id="call-1",
+                        name="knowledge_list",
+                    )],
+                )
             )
-        return LLMResponse(content="工具调用完成")
+            return
+        yield LLMCompleted(response=LLMResponse(content="工具调用完成"))
 
 
 class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):

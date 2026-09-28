@@ -1,26 +1,29 @@
 """将用户消息中引用的本地文本文件写入知识库。"""
 
 import asyncio
-
 import hashlib
 from pathlib import Path
 import re
 from typing import Any
 
+from tonyhar.rag.file_reader import FileTextReader
+from tonyhar.rag.text_ingestion import TextIngestionService
 from tonyhar.tooling import BaseTool, ToolPolicy, tool
-
-from tonyhar.rag.pipeline_context import PipelineContext
-from tonyhar.rag.scheduler import DocumentScheduler
 
 
 class FileIngestionService:
-    """发现本地文本文件，并调用文档流水线完成入库。"""
+    """发现本地文件，组合“读取文本”和“文本入库”两个独立步骤。"""
 
     SUPPORTED_SUFFIXES = frozenset({".txt", ".md"})
     MAX_FILES = 1_000
 
-    def __init__(self, scheduler: DocumentScheduler):
-        self.scheduler = scheduler
+    def __init__(
+        self,
+        reader: FileTextReader,
+        text_ingestion: TextIngestionService,
+    ) -> None:
+        self.reader = reader
+        self.text_ingestion = text_ingestion
 
     @staticmethod
     def _candidate_sources(message: str) -> list[Path]:
@@ -113,17 +116,23 @@ class FileIngestionService:
                 continue
 
             try:
-                context = PipelineContext(
-                    document_id=hashlib.sha1(
-                        str(path).encode("utf-8")
-                    ).hexdigest(),
+                document_id = hashlib.sha1(
+                    str(path).encode("utf-8")
+                ).hexdigest()
+                text = self.reader.read(path)
+                context = self.text_ingestion.ingest(
+                    text,
+                    document_id=document_id,
                     filename=path.name,
-                    binary=path.read_bytes(),
+                    metadata={
+                        "file_type": path.suffix.lower(),
+                        "source_type": "file",
+                        "source_path": str(path),
+                    },
                 )
-                self.scheduler.run(context)
                 files.append({
                     "filename": path.name,
-                    "document_id": context.document_id,
+                    "document_id": document_id,
                     "chunk_count": len(context.chunks),
                     "success": True,
                 })
@@ -160,9 +169,9 @@ class FileIngestionTool(BaseTool):
         "additionalProperties": False,
     }
 
-    def __init__(self, scheduler: DocumentScheduler):
-        self.service = FileIngestionService(scheduler)
+    def __init__(self, service: FileIngestionService):
+        self.service = service
 
     async def execute(self, message: str) -> dict[str, Any]:
-        # 当前阶段显式隔离同步 RAG 流水线；下一阶段会迁移为独立 Workflow。
+        # 文件读取、切块和向量写入是同步依赖，在工具边界统一隔离。
         return await asyncio.to_thread(self.service.ingest, message)

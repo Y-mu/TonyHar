@@ -25,6 +25,12 @@ class WebTestAgent:
             session_id=context.session_id,
             data={"state": context.state.value},
         )
+        yield AgentEvent(
+            type=AgentEventType.TEXT_DELTA,
+            run_id=context.run_id,
+            session_id=context.session_id,
+            data={"state": context.state.value, "step": 1, "delta": "answer:"},
+        )
 
         context.transition_to(AgentState.PLANNING)
         context.add_message("user", context.user_input)
@@ -98,6 +104,7 @@ class WebApiTest(unittest.TestCase):
             )
             self.assertEqual(response.headers["x-accel-buffering"], "no")
             self.assertIn("event: run_started", response.text)
+            self.assertIn("event: text_delta", response.text)
             self.assertIn("event: final_answer", response.text)
 
             data_lines = [

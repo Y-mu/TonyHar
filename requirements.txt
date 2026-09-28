@@ -3,7 +3,9 @@ sentence-transformers
 torch
 tiktoken
 openai
+requests
 semantic-router
 fastapi
 sse-starlette
+trafilatura
 uvicorn[standard]

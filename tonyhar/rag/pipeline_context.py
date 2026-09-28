@@ -10,7 +10,6 @@ from .vector_store_base import Chunk
 class PipelineContext:
     document_id: str
     filename: str
-    binary: bytes | None = None
     raw_document: RawDocument | None = None
     chunks: list[Chunk] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)

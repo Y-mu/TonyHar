@@ -34,9 +34,12 @@ ChatService
 
 ### 模型与工具
 
-- `DeepSeekLLM` 使用 `AsyncOpenAI`。
+- `DeepSeekLLM` 使用 `AsyncOpenAI`，并通过唯一的异步 `BaseLLM.stream()`
+  协议输出文本增量和拼装后的完整响应。
 - 每轮运行共享一个总 deadline；模型和工具的单次超时都不能突破总预算。
 - 模型调用包含有界重试、full jitter 指数退避和并发安全熔断器。
+- 模型流在首个文本增量发出前可以重试；开始向用户输出后不再自动重试，
+  避免重复文本。
 - 工具的唯一运行入口是异步 `BaseTool.execute()`，不保留同步执行协议。
 - `@tool` 将异步函数或 `BaseTool` 子类转换为完整的 `ToolDefinition / BaseTool`；
   函数参数类型提示、docstring、JSON Schema 或 Pydantic 模型可用于生成参数 Schema。
@@ -47,6 +50,8 @@ ChatService
 - 标记为 `parallel_safe` 的同轮工具调用受并发上限保护并发执行。
 - 具体工具可以直接实现 `BaseTool`，也可以使用 `@tool` 将异步函数转换为 `BaseTool`；
   装饰器不修改全局 Manager。
+- URL 正文工具在 Trafilatura 提取后统一规范 Unicode、空白和软换行，同时保留
+  Markdown 标题、列表、表格及代码块结构，便于后续文档切块。
 - Agent 通过 `ToolManager.schemas()` 将全部工具 Schema 传给模型，通过
   `ToolManager.execute()` 执行模型返回的 `ToolRequest`。
 
@@ -57,15 +62,19 @@ ChatService
 ### RAG
 
 ```text
-文件
-  → Parser
+本地文件 → FileTextReader ─┐
+网页正文或其他字符串 ──────┤
+                           ↓
+                  TextIngestionService
   → HybridSplitter
   → DocumentService
   → VectorStore
   → ChromaDB
 ```
 
-RAG 服务通过 `VectorStore` 抽象隔离 Chroma，工具只接收由组合根注入的服务，不自行创建基础设施。
+文件读取/解析与文本切块/入库是两个独立步骤。`TextIngestionService` 只接收正文字符串和
+文档 metadata，因此本地文件与网页抓取结果可以复用同一条入库流水线。RAG 服务通过
+`VectorStore` 抽象隔离 Chroma，工具只接收由组合根注入的服务，不自行创建基础设施。
 
 ## 本地运行
 
@@ -101,8 +110,9 @@ GET  /health/ready
 ```
 
 流式消息接口接收 `{"message": "..."}`，并以 SSE 输出 `AgentEvent`。
-这是 Agent 执行事件流，最终答案目前作为一个完整的 `final_answer` 事件返回，
-并非逐 token 文本流。浏览器应使用支持 POST 响应流的 `fetch()` 消费它。
+模型生成的可见文本通过连续的 `text_delta` 事件增量返回；`final_answer`
+仍携带完整答案，用于终态确认、会话持久化和客户端最终校准。浏览器应使用
+支持 POST 响应流的 `fetch()` 消费它。
 
 开发环境默认允许 `http://localhost:5173` 和
 `http://127.0.0.1:5173` 跨域访问。可以使用逗号分隔的
@@ -124,8 +134,8 @@ npm run dev
 
 开发服务器默认把 `/api` 和 `/health` 代理到 `127.0.0.1:8000`。部署到独立域名时，
 可在 `frontend/.env` 设置 `VITE_API_BASE_URL`，例如 `https://api.example.com`。
-当前 SSE 返回的是 Agent 执行事件，`final_answer` 一次性携带完整答案；界面会显示模型、
-工具和终态状态，并支持停止当前请求、Markdown/GFM 渲染、错误重试和移动端会话抽屉。
+当前 SSE 同时返回 Agent 执行事件和模型 `text_delta`；界面会增量追加回答，
+显示模型、工具和终态状态，并支持停止当前请求、Markdown/GFM 渲染、错误重试和移动端会话抽屉。
 直接执行“列出文档”时，工具仍返回结构化目录数据，Agent 会通过工具声明的展示格式化器
 将最终答案转换为包含文档总数、文件名和文档 ID 的 Markdown 列表。
 

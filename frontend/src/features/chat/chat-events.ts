@@ -44,6 +44,8 @@ export function applyAgentEvent(
       return { ...state, label: "已理解问题，正在规划回答" };
     case "model_started":
       return { ...state, label: "正在思考" };
+    case "text_delta":
+      return { ...state, label: "正在生成回答" };
     case "model_completed":
       return { ...state, label: "模型响应完成" };
     case "tool_started": {

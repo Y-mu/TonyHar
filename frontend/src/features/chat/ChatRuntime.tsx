@@ -22,7 +22,7 @@ type ChatRuntimeProps = {
   sessionId: string;
   initialMessages: SessionMessage[];
   onRunStateChange: (state: RunViewState) => void;
-  onMessagesChange?: (messages: UiMessage[]) => void;
+  onMessageSent?: (message: string) => void;
 };
 
 function messageId(prefix: string): string {
@@ -63,21 +63,15 @@ export function ChatRuntime({
   sessionId,
   initialMessages,
   onRunStateChange,
-  onMessagesChange,
+  onMessageSent,
 }: ChatRuntimeProps) {
   const [messages, setMessages] = useState<UiMessage[]>(() => initialUiMessages(initialMessages));
   const [isRunning, setIsRunning] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const assistantIdRef = useRef<string | null>(null);
   const updateMessages: Dispatch<SetStateAction<UiMessage[]>> = useCallback(
-    (update) => {
-      setMessages((current) => {
-        const next = typeof update === "function" ? update(current) : update;
-        onMessagesChange?.(next);
-        return next;
-      });
-    },
-    [onMessagesChange],
+    (update) => setMessages(update),
+    [],
   );
 
   const onNew = useCallback(
@@ -91,6 +85,7 @@ export function ChatRuntime({
       abortRef.current = new AbortController();
       setIsRunning(true);
       onRunStateChange(initialRunViewState);
+      onMessageSent?.(content);
 
       updateMessages((current) => [
         ...current,
@@ -116,6 +111,18 @@ export function ChatRuntime({
           onEvent: (event) => {
             runState = applyAgentEvent(runState, event);
             onRunStateChange(runState);
+            if (event.type === "text_delta") {
+              const delta = typeof event.data.delta === "string" ? event.data.delta : "";
+              if (delta) {
+                updateMessages((current) =>
+                  current.map((item) =>
+                    item.role === "assistant" && item.id === assistantId
+                      ? { ...item, content: item.content + delta, status: { type: "running" } }
+                      : item,
+                  ),
+                );
+              }
+            }
             if (event.type === "final_answer") {
               const answer = runState.answer ?? "";
               updateMessages((current) =>
@@ -169,7 +176,7 @@ export function ChatRuntime({
         assistantIdRef.current = null;
       }
     },
-    [isRunning, onRunStateChange, sessionId, updateMessages],
+    [isRunning, onMessageSent, onRunStateChange, sessionId, updateMessages],
   );
 
   const onCancel = useCallback(async () => {

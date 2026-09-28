@@ -4,6 +4,8 @@ from types import SimpleNamespace
 
 from tonyhar.agent.llm import (
     DeepSeekLLM,
+    LLMCompleted,
+    LLMTextDelta,
     ModelCircuitOpenError,
     ModelTimeoutError,
 )
@@ -34,30 +36,79 @@ class AsyncEchoTool(BaseTool):
         return text
 
 
+def text_chunk(
+    content: str = "",
+    *,
+    finish_reason: str | None = None,
+    tool_calls=None,
+):
+    return SimpleNamespace(
+        choices=[SimpleNamespace(
+            delta=SimpleNamespace(
+                content=content,
+                reasoning_content=None,
+                tool_calls=tool_calls,
+            ),
+            finish_reason=finish_reason,
+        )],
+        usage=None,
+    )
+
+
+class FakeStream:
+    def __init__(self, chunks, delay=0.0, error=None):
+        self.chunks = chunks
+        self.delay = delay
+        self.error = error
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return False
+
+    async def __aiter__(self):
+        for chunk in self.chunks:
+            if self.delay:
+                await asyncio.sleep(self.delay)
+            yield chunk
+        if self.error is not None:
+            raise self.error
+
+
 class FakeCompletions:
-    def __init__(self, failures=0, delay=0.0):
+    def __init__(self, failures=0, delay=0.0, chunks=None, stream_error=None):
         self.failures = failures
         self.delay = delay
+        self.chunks = chunks or [text_chunk("ok", finish_reason="stop")]
+        self.stream_error = stream_error
         self.calls = 0
 
     async def create(self, **kwargs):
         self.calls += 1
-        if self.delay:
-            await asyncio.sleep(self.delay)
         if self.calls <= self.failures:
             raise TimeoutError("upstream timeout")
-        return SimpleNamespace(
-            choices=[SimpleNamespace(
-                message=SimpleNamespace(content="ok", tool_calls=None),
-                finish_reason="stop",
-            )],
-            usage=None,
+        return FakeStream(
+            self.chunks,
+            delay=self.delay,
+            error=self.stream_error,
         )
 
 
 class FakeClient:
-    def __init__(self, failures=0, delay=0.0):
-        self.completions = FakeCompletions(failures, delay)
+    def __init__(
+        self,
+        failures=0,
+        delay=0.0,
+        chunks=None,
+        stream_error=None,
+    ):
+        self.completions = FakeCompletions(
+            failures,
+            delay,
+            chunks,
+            stream_error,
+        )
         self.chat = SimpleNamespace(completions=self.completions)
         self.closed = False
 
@@ -152,6 +203,17 @@ class AsyncToolRuntimeTest(unittest.IsolatedAsyncioTestCase):
 
 
 class LLMResilienceTest(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    async def collect(llm, deadline=None):
+        return [
+            event
+            async for event in llm.stream(
+                [],
+                [],
+                deadline=deadline or Deadline.after(1),
+            )
+        ]
+
     async def test_retry_then_success(self):
         client = FakeClient(failures=2)
         llm = DeepSeekLLM(
@@ -164,9 +226,18 @@ class LLMResilienceTest(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        result = await llm.chat([], [], deadline=Deadline.after(1))
+        events = await self.collect(llm)
+        result = next(
+            event.response
+            for event in events
+            if isinstance(event, LLMCompleted)
+        )
 
         self.assertEqual(result.content, "ok")
+        self.assertEqual(
+            [event.text for event in events if isinstance(event, LLMTextDelta)],
+            ["ok"],
+        )
         self.assertEqual(client.completions.calls, 3)
         self.assertEqual(llm.circuit_breaker.state, "closed")
 
@@ -186,10 +257,10 @@ class LLMResilienceTest(unittest.IsolatedAsyncioTestCase):
 
         for _ in range(2):
             with self.assertRaises(ModelTimeoutError):
-                await llm.chat([], [], deadline=Deadline.after(1))
+                await self.collect(llm)
         self.assertEqual(llm.circuit_breaker.state, "open")
         with self.assertRaises(ModelCircuitOpenError):
-            await llm.chat([], [], deadline=Deadline.after(1))
+            await self.collect(llm)
         self.assertEqual(client.completions.calls, 2)
 
     async def test_run_deadline_bounds_model_attempt(self):
@@ -201,7 +272,69 @@ class LLMResilienceTest(unittest.IsolatedAsyncioTestCase):
         )
 
         with self.assertRaises(RunDeadlineExceeded):
-            await llm.chat([], [], deadline=Deadline.after(0.01))
+            await self.collect(llm, Deadline.after(0.01))
+
+    async def test_stream_reassembles_fragmented_tool_call(self):
+        first_call = SimpleNamespace(
+            index=0,
+            id="call-",
+            function=SimpleNamespace(
+                name="knowledge_",
+                arguments='{"query":"',
+            ),
+        )
+        second_call = SimpleNamespace(
+            index=0,
+            id="1",
+            function=SimpleNamespace(
+                name="search",
+                arguments='test"}',
+            ),
+        )
+        client = FakeClient(chunks=[
+            text_chunk(tool_calls=[first_call]),
+            text_chunk(tool_calls=[second_call], finish_reason="tool_calls"),
+        ])
+        llm = DeepSeekLLM(api_key="test", client=client)
+
+        events = await self.collect(llm)
+        result = next(
+            event.response
+            for event in events
+            if isinstance(event, LLMCompleted)
+        )
+
+        self.assertEqual(len(result.tool_calls), 1)
+        self.assertEqual(result.tool_calls[0].tool_call_id, "call-1")
+        self.assertEqual(result.tool_calls[0].name, "knowledge_search")
+        self.assertEqual(result.tool_calls[0].arguments, {"query": "test"})
+
+    async def test_stream_does_not_retry_after_text_was_emitted(self):
+        client = FakeClient(
+            chunks=[text_chunk("partial")],
+            stream_error=TimeoutError("stream interrupted"),
+        )
+        llm = DeepSeekLLM(
+            api_key="test",
+            client=client,
+            retry_policy=RetryPolicy(
+                max_attempts=3,
+                base_delay=0,
+                max_delay=0,
+            ),
+        )
+
+        received = []
+        with self.assertRaises(ModelTimeoutError):
+            async for event in llm.stream(
+                [],
+                [],
+                deadline=Deadline.after(1),
+            ):
+                received.append(event)
+
+        self.assertEqual(client.completions.calls, 1)
+        self.assertEqual(received, [LLMTextDelta(text="partial")])
 
     async def test_close_releases_client(self):
         client = FakeClient()

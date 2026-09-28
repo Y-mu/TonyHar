@@ -8,7 +8,13 @@ from tonyhar.resilience import ExecutionError, RunDeadlineExceeded
 from tonyhar.tooling import ToolManager, ToolRequest, ToolResult
 
 from .intent_planner import ExecutionMode, IntentPlanner
-from .llm import BaseLLM, LLMResponse
+from .llm import (
+    BaseLLM,
+    LLMCompleted,
+    LLMResponse,
+    LLMTextDelta,
+    ModelResponseError,
+)
 from .runnables import (
     AgentEvent,
     AgentEventType,
@@ -67,27 +73,8 @@ class Agent(AgentStateMachine):
         self,
         context: AgentRunContext,
     ) -> AsyncIterator[AgentEvent]:
-        """执行一次独立运行，并按状态机推进顺序产生事件。
-
-        这里的“无状态”不是说运行过程中没有状态，而是说状态不存放在
-        ``Agent`` 对象上。每次调用都遵循同一套流程：
-
-        1. 校验 context 必须处于 ``CREATED``，然后发出运行开始事件。
-        2. 进入 ``PLANNING``，由 ``IntentPlanner`` 生成本轮执行计划。
-        3. 如果计划包含确定性工具调用，进入 ``EXECUTING_TOOLS``；工具结果
-           写回 context，并根据结果直接完成，或继续交给模型。
-        4. 需要模型推理时进入 ``CALLING_MODEL``，调用 LLM。
-        5. 模型返回普通文本时进入 ``COMPLETED``；模型返回 tool calls 时先
-           记录 assistant tool-call 消息，再进入 ``EXECUTING_TOOLS``。
-        6. 工具完成后回到 ``CALLING_MODEL``，如此循环直到得到最终文本或达到
-           ``max_steps``。
-        7. 取消请求进入 ``CANCELLED``；未处理异常进入 ``FAILED``。这两种
-           终态都不会被伪装成成功答案。
-
-        所有状态转换都通过 ``AgentRunContext.transition_to`` 校验，事件只
-        反映当前 context，不修改 Agent 的共享字段。这样不同会话可以共享
-        一个 Agent 实例，而不会互相覆盖状态。
-        """
+        """执行一次独立运行，并按状态机推进顺序产生事件。"""
+        # 校验本轮独立 context 必须从 CREATED 开始，并发出运行开始事件。
         self._validate_context(context)
         yield self._event(
             context,
@@ -96,6 +83,7 @@ class Agent(AgentStateMachine):
         )
 
         try:
+            # 进入 PLANNING，由 IntentPlanner 生成本轮执行计划。
             context.transition_to(AgentState.PLANNING)
             plan = self.intent_planner.plan(context.user_input)
             context.add_message("user", plan.user_message)
@@ -108,6 +96,7 @@ class Agent(AgentStateMachine):
                 tool_calls=[request.to_openai() for request in plan.tool_calls],
             )
 
+            # 优先执行计划中已经确定的工具调用，并将结果写回 context。
             planned_results: list[ToolResult] = []
             if plan.tool_calls:
                 context.transition_to(AgentState.EXECUTING_TOOLS)
@@ -121,6 +110,7 @@ class Agent(AgentStateMachine):
                 planned_results = list(context.last_tool_results)
                 context.pending_tools.clear()
 
+            # DIRECT_TOOL 模式直接格式化工具结果，不再调用模型。
             if plan.mode is ExecutionMode.DIRECT_TOOL:
                 answer = self._format_direct_results(planned_results)
                 context.add_message("assistant", answer)
@@ -153,6 +143,7 @@ class Agent(AgentStateMachine):
                 )
                 return
 
+            # 进入模型推理循环，直到生成最终文本或达到 max_steps。
             context.transition_to(AgentState.CALLING_MODEL)
             for step in range(1, self.max_steps + 1):
                 context.step = step
@@ -161,11 +152,25 @@ class Agent(AgentStateMachine):
                     AgentEventType.MODEL_STARTED,
                     step=step,
                 )
-                response = await self.llm.chat(
+                response: LLMResponse | None = None
+                async for model_event in self.llm.stream(
                     messages=context.messages,
                     tools=self.tool_manager.schemas(),
                     deadline=context.deadline,
-                )
+                ):
+                    if isinstance(model_event, LLMTextDelta):
+                        yield self._event(
+                            context,
+                            AgentEventType.TEXT_DELTA,
+                            step=step,
+                            delta=model_event.text,
+                        )
+                    elif isinstance(model_event, LLMCompleted):
+                        response = model_event.response
+
+                if response is None:
+                    raise ModelResponseError("模型流没有产生完成事件")
+
                 yield self._event(
                     context,
                     AgentEventType.MODEL_COMPLETED,
@@ -178,6 +183,7 @@ class Agent(AgentStateMachine):
                     duration_ms=response.duration_ms,
                 )
 
+                # 模型没有请求工具时，将普通文本作为最终答案完成本轮运行。
                 if not response.get_tool_calls():
                     answer = response.get_content()
                     context.add_message("assistant", answer)
@@ -192,6 +198,7 @@ class Agent(AgentStateMachine):
                     )
                     return
 
+                # 记录模型的工具调用，执行完成后回到 CALLING_MODEL 继续推理。
                 self._record_assistant_tool_call(context, response)
                 context.transition_to(AgentState.EXECUTING_TOOLS)
                 context.pending_tools = list(response.get_tool_calls())
@@ -204,6 +211,7 @@ class Agent(AgentStateMachine):
                 context.pending_tools.clear()
                 context.transition_to(AgentState.CALLING_MODEL)
 
+            # 达到最大步数仍未生成最终答案时，以失败终态结束。
             answer = f"Agent 在 {self.max_steps} 步内没有生成最终答案"
             context.transition_to(AgentState.FAILED)
             yield self._event(
@@ -217,6 +225,7 @@ class Agent(AgentStateMachine):
                 error_message=answer,
             )
         except asyncio.CancelledError:
+            # 取消必须进入 CANCELLED，并继续向上抛出取消异常。
             if context.state not in {
                 AgentState.COMPLETED,
                 AgentState.FAILED,
@@ -225,6 +234,7 @@ class Agent(AgentStateMachine):
                 context.transition_to(AgentState.CANCELLED)
             raise
         except ExecutionError as exc:
+            # 已知执行异常保留具体错误码，并区分超时与依赖错误。
             if context.state not in {
                 AgentState.COMPLETED,
                 AgentState.FAILED,
@@ -245,6 +255,7 @@ class Agent(AgentStateMachine):
                 error_message=str(exc),
             )
         except Exception as exc:
+            # 其余未处理异常统一转换为 FAILED 事件，不伪装成成功答案。
             if context.state not in {
                 AgentState.COMPLETED,
                 AgentState.FAILED,

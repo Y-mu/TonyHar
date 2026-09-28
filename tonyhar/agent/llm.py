@@ -6,6 +6,7 @@ import asyncio
 import json
 import time
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field, replace
 from typing import Any, Sequence
 
@@ -55,15 +56,32 @@ class LLMResponse:
         return self.reasoning_content or ""
 
 
+@dataclass(frozen=True)
+class LLMTextDelta:
+    """模型产生的一段可直接展示给用户的文本。"""
+
+    text: str
+
+
+@dataclass(frozen=True)
+class LLMCompleted:
+    """模型流的唯一完成事件，包含拼装后的完整响应。"""
+
+    response: LLMResponse
+
+
+LLMStreamEvent = LLMTextDelta | LLMCompleted
+
+
 class BaseLLM(ABC):
     @abstractmethod
-    async def chat(
+    async def stream(
         self,
         messages: Sequence[dict],
         tools: Sequence[dict],
         *,
         deadline: Deadline,
-    ) -> LLMResponse:
+    ) -> AsyncIterator[LLMStreamEvent]:
         raise NotImplementedError
 
     @abstractmethod
@@ -144,44 +162,96 @@ class DeepSeekLLM(BaseLLM):
             )
         )
 
-    async def chat(
+    async def stream(
         self,
         messages: Sequence[dict],
         tools: Sequence[dict],
         *,
         deadline: Deadline,
-    ) -> LLMResponse:
+    ) -> AsyncIterator[LLMStreamEvent]:
         started_at = time.monotonic()
         try:
             permit = self.circuit_breaker.acquire()
         except CircuitOpenError as exc:
             raise ModelCircuitOpenError(str(exc)) from exc
 
+        permit_finalized = False
+        emitted_text = False
         try:
             for attempt in range(1, self.retry_policy.max_attempts + 1):
+                content_parts: list[str] = []
+                reasoning_parts: list[str] = []
+                tool_call_parts: dict[int, dict[str, str]] = {}
+                prompt_tokens = 0
+                completion_tokens = 0
+                finish_reason = "unknown"
+
                 try:
-                    response = await self._request_once(
+                    async for chunk in self._request_stream_once(
                         messages,
                         tools,
                         deadline=deadline,
+                    ):
+                        usage = getattr(chunk, "usage", None)
+                        if usage is not None:
+                            prompt_tokens = (
+                                getattr(usage, "prompt_tokens", None) or 0
+                            )
+                            completion_tokens = (
+                                getattr(usage, "completion_tokens", None) or 0
+                            )
+
+                        choices = getattr(chunk, "choices", None) or []
+                        if not choices:
+                            continue
+
+                        choice = choices[0]
+                        delta = getattr(choice, "delta", None)
+                        if delta is None:
+                            continue
+
+                        text = getattr(delta, "content", None) or ""
+                        if text:
+                            content_parts.append(text)
+                            emitted_text = True
+                            yield LLMTextDelta(text=text)
+
+                        reasoning = (
+                            getattr(delta, "reasoning_content", None) or ""
+                        )
+                        if reasoning:
+                            reasoning_parts.append(reasoning)
+
+                        self._accumulate_tool_calls(
+                            tool_call_parts,
+                            getattr(delta, "tool_calls", None) or [],
+                        )
+
+                        if getattr(choice, "finish_reason", None):
+                            finish_reason = choice.finish_reason
+
+                    parsed = LLMResponse(
+                        content="".join(content_parts),
+                        reasoning_content="".join(reasoning_parts),
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        finish_reason=finish_reason,
+                        tool_calls=self._build_tool_calls(tool_call_parts),
                     )
-                    parsed = self._parse_response(response)
-                except asyncio.CancelledError:
-                    self.circuit_breaker.release_cancelled(permit)
-                    raise
                 except RunDeadlineExceeded:
-                    self.circuit_breaker.release_cancelled(permit)
                     raise
                 except Exception as exc:
                     error = self._map_error(exc)
                     if (
-                        not error.retryable
+                        emitted_text
+                        or not error.retryable
                         or attempt >= self.retry_policy.max_attempts
                     ):
                         if error.breaker_failure:
                             self.circuit_breaker.record_failure(permit)
                         else:
                             self.circuit_breaker.release_cancelled(permit)
+                        permit_finalized = True
                         raise error from exc
 
                     delay = self.retry_policy.delay(
@@ -192,20 +262,22 @@ class DeepSeekLLM(BaseLLM):
                     continue
 
                 self.circuit_breaker.record_success(permit)
-                return replace(
-                    parsed,
-                    attempts=attempt,
-                    duration_ms=round(
-                        (time.monotonic() - started_at) * 1000,
-                        3,
-                    ),
+                permit_finalized = True
+                yield LLMCompleted(
+                    response=replace(
+                        parsed,
+                        attempts=attempt,
+                        duration_ms=round(
+                            (time.monotonic() - started_at) * 1000,
+                            3,
+                        ),
+                    )
                 )
-        except asyncio.CancelledError:
-            self.circuit_breaker.release_cancelled(permit)
-            raise
-        except RunDeadlineExceeded:
-            self.circuit_breaker.release_cancelled(permit)
-            raise
+                return
+        finally:
+            # 消费方取消或提前关闭异步生成器时，释放尚未结算的熔断许可。
+            if not permit_finalized:
+                self.circuit_breaker.release_cancelled(permit)
 
         raise AssertionError("模型重试循环未返回结果")
 
@@ -213,26 +285,31 @@ class DeepSeekLLM(BaseLLM):
         """关闭应用生命周期内复用的异步 HTTP 客户端。"""
         await self._client.close()
 
-    async def _request_once(
+    async def _request_stream_once(
         self,
         messages: Sequence[dict],
         tools: Sequence[dict],
         *,
         deadline: Deadline,
-    ) -> Any:
+    ) -> AsyncIterator[Any]:
         remaining = deadline.require_remaining()
         timeout = min(self.attempt_timeout, remaining)
-        bounded_by_run = remaining <= self.attempt_timeout
         try:
-            async with asyncio.timeout(timeout):
-                return await self._client.chat.completions.create(
+            # SDK timeout 约束连接和相邻数据块读取；外层 deadline 约束整轮流。
+            async with asyncio.timeout(remaining):
+                response_stream = await self._client.chat.completions.create(
                     model=self._model,
                     messages=list(messages),
                     tools=list(tools) or None,
+                    stream=True,
+                    stream_options={"include_usage": True},
                     timeout=timeout,
                 )
+                async with response_stream:
+                    async for chunk in response_stream:
+                        yield chunk
         except TimeoutError as exc:
-            if bounded_by_run and deadline.remaining() <= 0:
+            if deadline.remaining() <= 0:
                 raise RunDeadlineExceeded() from exc
             raise ModelTimeoutError("模型单次请求超时") from exc
 
@@ -269,36 +346,80 @@ class DeepSeekLLM(BaseLLM):
             return None
 
     @staticmethod
-    def _parse_response(response: Any) -> LLMResponse:
-        message = response.choices[0].message
+    def _accumulate_tool_calls(
+        parts: dict[int, dict[str, str]],
+        deltas: Sequence[Any],
+    ) -> None:
+        """按 index 拼装被模型流拆分的工具名称、ID 和 JSON 参数。"""
+        for delta in deltas:
+            index = int(delta.index)
+            current = parts.setdefault(
+                index,
+                {"id": "", "name": "", "arguments": ""},
+            )
+            delta_id = getattr(delta, "id", None)
+            if delta_id:
+                current["id"] = DeepSeekLLM._merge_fragment(
+                    current["id"],
+                    delta_id,
+                )
+
+            function = getattr(delta, "function", None)
+            if function is None:
+                continue
+            function_name = getattr(function, "name", None)
+            if function_name:
+                current["name"] = DeepSeekLLM._merge_fragment(
+                    current["name"],
+                    function_name,
+                )
+            if getattr(function, "arguments", None):
+                current["arguments"] += function.arguments
+
+    @staticmethod
+    def _merge_fragment(current: str, incoming: str) -> str:
+        """兼容字段只在首块出现、重复出现或按前缀分片的供应商。"""
+        if not current:
+            return incoming
+        if incoming == current or current.endswith(incoming):
+            return current
+        if incoming.startswith(current):
+            return incoming
+        return current + incoming
+
+    @staticmethod
+    def _build_tool_calls(
+        parts: dict[int, dict[str, str]],
+    ) -> list[ToolRequest]:
         tool_calls: list[ToolRequest] = []
-        for call in message.tool_calls or []:
-            arguments = json.loads(call.function.arguments or "{}")
+        for _, part in sorted(parts.items()):
+            if not part["id"] or not part["name"]:
+                raise ModelResponseError("模型工具调用缺少 id 或 name")
+            try:
+                arguments = json.loads(part["arguments"] or "{}")
+            except json.JSONDecodeError as exc:
+                raise ModelResponseError(
+                    f"模型工具参数不是有效 JSON: {exc}"
+                ) from exc
+            if not isinstance(arguments, dict):
+                raise ModelResponseError("模型工具参数必须是 JSON object")
             tool_calls.append(
                 ToolRequest(
-                    tool_call_id=call.id,
-                    name=call.function.name,
+                    tool_call_id=part["id"],
+                    name=part["name"],
                     arguments=arguments,
                 )
             )
-
-        usage = response.usage
-        return LLMResponse(
-            content=message.content or "",
-            reasoning_content=(
-                getattr(message, "reasoning_content", None) or ""
-            ),
-            prompt_tokens=usage.prompt_tokens if usage else 0,
-            completion_tokens=usage.completion_tokens if usage else 0,
-            finish_reason=response.choices[0].finish_reason or "unknown",
-            tool_calls=tool_calls,
-        )
+        return tool_calls
 
 
 __all__ = [
     "BaseLLM",
     "DeepSeekLLM",
+    "LLMCompleted",
     "LLMResponse",
+    "LLMStreamEvent",
+    "LLMTextDelta",
     "ModelCircuitOpenError",
     "ModelError",
     "ModelRateLimitError",

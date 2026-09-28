@@ -121,9 +121,9 @@ class ChatService:
            ``finally`` 都会把上下文中的消息写回会话存储。锁也会在离开
            ``async with`` 后释放，因此不会永久阻塞后续请求。
 
-        注意：这里的“流”是 Agent 事件流，不等同于模型逐 token 的文本
-        流。若要实现逐字输出，需要在 ``BaseLLM`` 增加模型供应商的流式
-        接口，并由 Agent 产生文本增量事件。
+        模型生成期间，Agent 会把 ``BaseLLM.stream()`` 的文本片段转换为
+        ``TEXT_DELTA`` 事件；传输层仍然只转发供应商无关的 AgentEvent，
+        不直接暴露模型 SDK 的流对象。
         """
         # 在取得锁之前完成输入校验，非法请求不会占用会话资源。
         self._validate_input(session_id, user_input)

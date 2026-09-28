@@ -54,10 +54,11 @@ class DocumentService:
             raw=chunk.raw,
         )
 
-    def index_chunks(self, chunks: Sequence[Chunk]) -> int:
-        """新增或更新一批文档切片。"""
+    def index_chunks(self, chunks: Sequence[Chunk]) -> list[Chunk]:
+        """规范并写入文档切片，返回实际入库的切片。"""
         prepared_chunks = [self.prepare_chunk(chunk) for chunk in chunks]
-        return self.vector_store.upsert(prepared_chunks)
+        self.vector_store.upsert(prepared_chunks)
+        return prepared_chunks
 
     def delete_document(self, document_id: str) -> int:
         """删除一个文档对应的全部切片。"""

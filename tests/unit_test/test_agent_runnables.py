@@ -3,7 +3,12 @@ import asyncio
 
 from tonyhar.agent import Agent
 from tonyhar.agent.intent_planner import IntentPlanner
-from tonyhar.agent.llm import BaseLLM, LLMResponse
+from tonyhar.agent.llm import (
+    BaseLLM,
+    LLMCompleted,
+    LLMResponse,
+    LLMTextDelta,
+)
 from tonyhar.agent.runnables import (
     AgentEvent,
     AgentEventType,
@@ -25,9 +30,11 @@ class EventLLM(BaseLLM):
     def __init__(self):
         self.calls = 0
 
-    async def chat(self, messages, tools, *, deadline):
+    async def stream(self, messages, tools, *, deadline):
         self.calls += 1
-        return LLMResponse(content="完成")
+        yield LLMTextDelta(text="完")
+        yield LLMTextDelta(text="成")
+        yield LLMCompleted(response=LLMResponse(content="完成"))
 
     async def aclose(self):
         return None
@@ -96,9 +103,19 @@ class AgentRunnablesTest(unittest.TestCase):
                 AgentEventType.RUN_STARTED,
                 AgentEventType.INTENT_PLANNED,
                 AgentEventType.MODEL_STARTED,
+                AgentEventType.TEXT_DELTA,
+                AgentEventType.TEXT_DELTA,
                 AgentEventType.MODEL_COMPLETED,
                 AgentEventType.FINAL_ANSWER,
             ],
+        )
+        self.assertEqual(
+            "".join(
+                event.data["delta"]
+                for event in events
+                if event.type is AgentEventType.TEXT_DELTA
+            ),
+            "完成",
         )
         self.assertEqual(events[-1].data["answer"], "完成")
         self.assertEqual(context.state, AgentState.COMPLETED)

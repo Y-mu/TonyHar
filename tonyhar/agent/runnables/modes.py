@@ -103,6 +103,7 @@ class AgentEventType(str, Enum):
     RUN_STARTED = "run_started"
     INTENT_PLANNED = "intent_planned"
     MODEL_STARTED = "model_started"
+    TEXT_DELTA = "text_delta"
     MODEL_COMPLETED = "model_completed"
     TOOL_STARTED = "tool_started"
     TOOL_COMPLETED = "tool_completed"
