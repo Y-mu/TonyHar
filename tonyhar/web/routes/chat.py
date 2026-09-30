@@ -47,12 +47,12 @@ async def get_session(
 
     visible_messages = [
         ChatMessageResponse(
-            role=message["role"],
-            content=str(message.get("content", "")),
+            role=message.role,
+            content=message.content,
         )
         for message in session.messages
-        if message.get("role") in {"user", "assistant"}
-        and message.get("content")
+        if message.role in {"user", "assistant"}
+        and message.content
     ]
     return SessionResponse(
         session_id=session.session_id,

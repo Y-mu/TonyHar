@@ -36,6 +36,9 @@ class MemoryVectorStore(VectorStore):
     def search(self, query: str, top_k: int) -> Sequence[Chunk]:
         return list(self.chunks.values())[:top_k]
 
+    def keyword_search(self, query: str, top_k: int) -> Sequence[Chunk]:
+        return list(self.chunks.values())[:top_k]
+
     def list_documents(self) -> Sequence[DocumentSummary]:
         documents = {
             chunk.document_id: DocumentSummary(

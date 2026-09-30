@@ -8,7 +8,6 @@ from tonyhar.bootstrap import build_chat_service
 async def main() -> None:
     chat_service = build_chat_service()
     session_id = "cli"
-    await chat_service.create_session(session_id)
 
     try:
         while True:

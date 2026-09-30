@@ -67,6 +67,32 @@ class ToolResult:
         }
         return json.dumps(payload, ensure_ascii=False, default=str)
 
+    def content_for_model(self, max_chars: int) -> str:
+        """返回受限的模型上下文内容，完整 data 仍用于业务和展示。"""
+        if max_chars < 256:
+            raise ValueError("max_chars 不能小于 256")
+        content = self.content
+        if len(content) <= max_chars:
+            return content
+        low, high = 0, max_chars
+        best = '{"truncated":true}'
+        while low <= high:
+            middle = (low + high) // 2
+            candidate = json.dumps(
+                {
+                    "truncated": True,
+                    "original_chars": len(content),
+                    "preview": content[:middle],
+                },
+                ensure_ascii=False,
+            )
+            if len(candidate) <= max_chars:
+                best = candidate
+                low = middle + 1
+            else:
+                high = middle - 1
+        return best
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,

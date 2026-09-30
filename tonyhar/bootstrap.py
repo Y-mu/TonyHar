@@ -8,11 +8,18 @@ from pathlib import Path
 
 from tonyhar.agent import Agent
 from tonyhar.agent.dispatcher import RunDispatcher
-from tonyhar.agent.llm import DeepSeekLLM
+from tonyhar.agent.llm import BaseLLM, DeepSeekLLM
 from tonyhar.agent.user_intent_recognizer import (
     get_shared_intent_recognizer,
 )
-from tonyhar.conversation import ChatService, InMemorySessionStore
+from tonyhar.conversation import (
+    ChatService,
+    ContextBuilder,
+    ContextPolicy,
+    LLMMemoryCompactor,
+    SQLiteSessionStore,
+    TokenCounter,
+)
 from tonyhar.rag.chroma_store_imp import ChromaStoreImp
 from tonyhar.rag.document_service import DocumentService
 from tonyhar.rag.file_reader import FileTextReader
@@ -38,9 +45,9 @@ SYSTEM_PROMPT = (
 )
 
 
-def build_agent() -> Agent:
+def build_agent(llm: BaseLLM | None = None) -> Agent:
     """创建无会话状态的 Agent 及其基础设施依赖。"""
-    llm = DeepSeekLLM(api_key=os.environ.get("DEEPSEEK_API_KEY"))
+    llm = llm or DeepSeekLLM(api_key=os.environ.get("DEEPSEEK_API_KEY"))
     store = ChromaStoreImp(
         database_name=str(PROJECT_ROOT / "data" / "chroma"),
         collection_name="documents",
@@ -77,11 +84,20 @@ def build_agent() -> Agent:
 
 
 def build_chat_service() -> ChatService:
-    """创建应用级聊天服务及进程内会话存储。"""
+    """创建带持久化短期记忆的应用级聊天服务。"""
+    llm = DeepSeekLLM(api_key=os.environ.get("DEEPSEEK_API_KEY"))
+    memory_llm = DeepSeekLLM(api_key=os.environ.get("DEEPSEEK_API_KEY"))
+    counter = TokenCounter()
+    context_policy = ContextPolicy()
     return ChatService(
-        agent=build_agent(),
-        sessions=InMemorySessionStore(),
+        agent=build_agent(llm),
+        sessions=SQLiteSessionStore(PROJECT_ROOT / "data" / "sessions.sqlite3"),
         system_prompt=SYSTEM_PROMPT,
-        max_turns=20,
         run_timeout_seconds=90.0,
+        context_builder=ContextBuilder(counter, context_policy),
+        memory_compactor=LLMMemoryCompactor(
+            memory_llm,
+            counter,
+            max_tokens=context_policy.summary_max_tokens,
+        ),
     )

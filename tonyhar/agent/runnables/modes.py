@@ -63,6 +63,7 @@ class AgentRunContext:
     step: int = 0
     pending_tools: list[ToolRequest] = field(default_factory=list)
     last_tool_results: list[Any] = field(default_factory=list)
+    tool_context_chars_used: int = 0
 
     def __post_init__(self) -> None:
         if not self.run_id.strip():
@@ -73,6 +74,8 @@ class AgentRunContext:
             raise ValueError("user_input 不能为空")
         if self.step < 0:
             raise ValueError("step 不能小于 0")
+        if self.tool_context_chars_used < 0:
+            raise ValueError("tool_context_chars_used 不能小于 0")
         if not isinstance(self.deadline, Deadline):
             raise TypeError("deadline 必须是 Deadline")
         self.messages = deepcopy(self.messages)

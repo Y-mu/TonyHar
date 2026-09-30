@@ -77,6 +77,20 @@ class RecordingSpiderTool(BaseTool):
         return data
 
 
+class RecordingFileIngestionTool(BaseTool):
+    name = "file_ingestion"
+    description = "test file ingestion"
+    parameters = {
+        "type": "object",
+        "properties": {"message": {"type": "string"}},
+        "required": ["message"],
+        "additionalProperties": False,
+    }
+
+    async def execute(self, message):
+        return {"message": message}
+
+
 class TestLLM(BaseLLM):
     async def aclose(self):
         return None
@@ -162,12 +176,13 @@ class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):
 
         command = dispatcher.dispatch("请抓取 https://example.com/article。")
 
-        self.assertIs(command.kind, RunKind.DIRECT_TOOL)
+        self.assertIs(command.kind, RunKind.RETRIEVAL_AGENT)
         self.assertEqual(command.tool_requests[0].name, "spider_url")
         self.assertEqual(
             command.tool_requests[0].arguments,
             {"url": "https://example.com/article"},
         )
+        self.assertEqual(command.model_tool_names, ("file_ingestion",))
 
         with self.assertRaisesRegex(ValueError, "需要提供"):
             dispatcher.dispatch("请抓取这个网页")
@@ -250,11 +265,15 @@ class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIs(context.state, AgentState.COMPLETED)
 
-    async def test_spider_url_route_extracts_url_and_returns_direct_result(self):
+    async def test_spider_url_route_fetches_then_enters_agent_loop(self):
         spider = RecordingSpiderTool()
+        llm = RecordingLLM()
         agent = Agent(
-            llm=UnexpectedLLM(),
-            tool_manager=ToolManager([lambda: spider]),
+            llm=llm,
+            tool_manager=ToolManager([
+                lambda: spider,
+                RecordingFileIngestionTool,
+            ]),
             run_dispatcher=RunDispatcher(SpiderUrlRecognizer()),
         )
 
@@ -262,8 +281,18 @@ class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):
         result = await agent.invoke(context)
 
         self.assertTrue(result.success)
-        self.assertEqual(result.answer, "# 抓取结果\n\n网页正文")
+        self.assertEqual(result.answer, "根据检索证据作答")
         self.assertEqual(spider.urls, ["https://example.com/article"])
+        self.assertEqual(
+            [schema["function"]["name"] for schema in llm.tools],
+            ["file_ingestion"],
+        )
+        self.assertEqual(llm.messages[-2]["role"], "assistant")
+        self.assertEqual(llm.messages[-1]["role"], "tool")
+        self.assertEqual(
+            json.loads(llm.messages[-1]["content"]),
+            "# 抓取结果\n\n网页正文",
+        )
         self.assertIs(context.state, AgentState.COMPLETED)
 
     async def test_run_deadline_has_stable_terminal_error_code(self):

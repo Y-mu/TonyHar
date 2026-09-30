@@ -15,6 +15,7 @@ class ToolPolicy:
     parallel_safe: bool = False
     retry_base_delay: float = 0.25
     retry_max_delay: float = 2.0
+    max_model_output_chars: int = 6_000
 
     def __post_init__(self) -> None:
         if self.timeout_seconds <= 0:
@@ -25,6 +26,8 @@ class ToolPolicy:
             raise ValueError("只有幂等工具可以配置重试")
         if self.retry_base_delay < 0 or self.retry_max_delay < 0:
             raise ValueError("工具重试延迟不能小于 0")
+        if self.max_model_output_chars < 256:
+            raise ValueError("max_model_output_chars 不能小于 256")
 
 
 class RetryableToolError(RuntimeError):

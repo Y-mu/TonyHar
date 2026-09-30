@@ -31,6 +31,9 @@ htmlcov/
 .hf-cache/
 my_vector_db/
 chroma_db/
+data/sessions.sqlite3
+data/sessions.sqlite3-shm
+data/sessions.sqlite3-wal
 
 # Editor and operating-system files
 .vscode/

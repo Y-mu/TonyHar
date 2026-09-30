@@ -190,6 +190,16 @@ class ToolManagerTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "幂等工具"):
             ToolPolicy(max_attempts=2, idempotent=False)
 
+    async def test_tool_result_can_limit_model_context_without_losing_data(self):
+        payload = {"text": "x" * 1_000}
+        result = ToolResult(name="large", success=True, data=payload)
+
+        model_content = result.content_for_model(256)
+
+        self.assertLessEqual(len(model_content), 320)
+        self.assertIn('"truncated": true', model_content)
+        self.assertEqual(result.data, payload)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,7 +1,15 @@
 import asyncio
 import unittest
 
-from tonyhar.conversation import ChatService, InMemorySessionStore, Session
+from tonyhar.conversation import (
+    ChatService,
+    ContextBuilder,
+    ContextPolicy,
+    InMemorySessionStore,
+    Session,
+    TokenCounter,
+    TurnStatus,
+)
 from tonyhar.agent.runnables import (
     AgentEvent,
     AgentEventType,
@@ -91,10 +99,10 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         assert session_a is not None
         assert session_b is not None
 
-        a_contents = [message["content"] for message in session_a.messages]
-        b_contents = [message["content"] for message in session_b.messages]
-        self.assertEqual(session_a.messages[0]["role"], "system")
-        self.assertEqual(session_b.messages[0]["role"], "system")
+        a_contents = [message.content for message in session_a.messages]
+        b_contents = [message.content for message in session_b.messages]
+        self.assertEqual(session_a.system_prompt, "system")
+        self.assertEqual(session_b.system_prompt, "system")
         self.assertIn("A1", a_contents)
         self.assertIn("A2", a_contents)
         self.assertNotIn("B1", a_contents)
@@ -117,9 +125,9 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertGreaterEqual(agent.max_active_total, 2)
 
-    async def test_message_trimming_keeps_tool_exchange_together(self):
-        session = Session.create("session", max_turns=1)
-        session.replace_messages([
+    async def test_context_builder_keeps_tool_exchange_together(self):
+        session = Session.create("session")
+        session.append_turn([
             {"role": "user", "content": "old"},
             {
                 "role": "assistant",
@@ -132,6 +140,8 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
                 "tool_call_id": "old-call",
             },
             {"role": "assistant", "content": "old-answer"},
+        ], status=TurnStatus.COMPLETED, turn_id="old")
+        session.append_turn([
             {"role": "user", "content": "new"},
             {
                 "role": "assistant",
@@ -144,9 +154,20 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
                 "tool_call_id": "new-call",
             },
             {"role": "assistant", "content": "new-answer"},
-        ])
+        ], status=TurnStatus.COMPLETED, turn_id="new")
 
-        contents = [message["content"] for message in session.messages]
+        builder = ContextBuilder(
+            TokenCounter(),
+            ContextPolicy(
+                max_context_tokens=150,
+                response_reserve_tokens=20,
+                tool_schema_reserve_tokens=20,
+                minimum_recent_turns=1,
+                compaction_batch_tokens=100,
+            ),
+        )
+        messages = builder.build(session, "next")
+        contents = [message["content"] for message in messages]
         self.assertEqual(contents, ["new", "", "new-result", "new-answer"])
 
     async def test_chat_service_stream_saves_context_after_event_stream(self):
@@ -161,7 +182,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(session)
         assert session is not None
         self.assertEqual(
-            [message["content"] for message in session.messages],
+            [message.content for message in session.messages],
             ["hello", "answer:hello"],
         )
 
@@ -202,9 +223,10 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(saved)
         assert saved is not None
         self.assertEqual(
-            [message["content"] for message in saved.messages],
+            [message.content for message in saved.messages],
             ["partial"],
         )
+        self.assertEqual(saved.messages[0].status, TurnStatus.CANCELLED)
 
         agent.delay = 0
         result = await asyncio.wait_for(

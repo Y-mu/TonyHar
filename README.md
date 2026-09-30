@@ -15,7 +15,8 @@ TonyHar 是一个基于 Python、DeepSeek、语义路由和 Chroma 的本地知�
 CLI / FastAPI + SSE
     ↓
 ChatService
-    ├── SessionStore + session lock
+    ├── SQLiteSessionStore + session lock
+    ├── ContextBuilder + MemoryCompactor
     └── Agent.stream(context)
             ├── RunDispatcher → RunHandler
             ├── AgentLoop → AsyncOpenAI / DeepSeekLLM
@@ -28,10 +29,15 @@ ChatService
 - `AgentRunContext` 保存单次运行状态。
 - `AgentState` 管理请求分派、模型调用、工具执行和终态转换。
 - `RunDispatcher` 只把意图分类结果映射为直接工具、检索后生成或普通 Agent 三种策略。
+- 知识库检索采用 dense 向量召回与 Chroma 上的 BM25 词法召回混合，再以加权 RRF 去重排序；知识库工具统一调用 `Retriever.retrieve_hybrid()`。
 - 三种 `RunHandler` 承担策略执行，`AgentLoop` 只处理 LLM 与模型发起的 Tool 循环。
 - `AgentEvent` 描述运行过程，可直接转发到 SSE 或 WebSocket。
 - `AgentResult` 表示一次运行的最终结果。
-- `ChatService` 负责会话加载、会话级串行化和消息持久化。
+- `ChatService` 负责完整会话日志、短期记忆压缩、上下文组装、会话级串行化和持久化。
+- `ContextBuilder` 按模型 token 预算选择最近的完整轮次，不再按固定轮次数永久删除历史。
+- 较早的已完成轮次由 `LLMMemoryCompactor` 压缩为摘要和结构化任务状态；压缩失败时使用抽取式压缩。
+- 会话默认写入 `data/sessions.sqlite3`，进程重启后可以恢复。
+- 失败或取消的轮次会保留在日志中，但不会进入后续模型上下文。
 - 同一会话串行执行，不同会话通过 `asyncio` 并发执行。
 
 ### 模型与工具
@@ -56,9 +62,11 @@ ChatService
   Markdown 标题、列表、表格及代码块结构，便于后续文档切块。
 - `RunDispatcher` 为普通 Agent 请求声明本轮模型可见的只读 Tool；`AgentLoop`
   通过 `ToolManager.schemas(allowed_names)` 只发送允许的 Schema，并拒绝越权调用。
-- `spider_url` 是由 `RunDispatcher` 确定性路由的直接工具：路由层从用户指令提取并校验
-  HTTP(S) URL，再生成 `ToolRequest`；它不作为普通 Agent 的模型工具暴露。
+- `spider_url` 由 `RunDispatcher` 确定性预执行：路由层从用户指令提取并校验
+  HTTP(S) URL，再生成 `ToolRequest`；抓取结果写入上下文后进入 `AgentLoop`，
+  并向模型提供 `file_ingestion` Tool Schema。
 - 所有 Tool 都只通过 `ToolManager.execute()` 执行模型或 Handler 产生的 `ToolRequest`。
+- Tool 的完整结构化结果继续用于业务和展示；写入模型上下文的内容受单工具和单轮总量限制，避免大结果撑爆上下文。
 
 正式错误码区分 `run_timeout`、`model_timeout`、
 `model_rate_limited`、`model_unavailable`、`model_circuit_open`、
@@ -123,8 +131,8 @@ GET  /health/ready
 `http://127.0.0.1:5173` 跨域访问。可以使用逗号分隔的
 `TONYHAR_CORS_ORIGINS` 显式修改允许来源。
 
-当前 `InMemorySessionStore` 只适合单进程本地开发：会话会在重启后丢失，
-启动 Uvicorn 时不要配置多个 worker。
+生产组合根使用 SQLite 持久化会话；`InMemorySessionStore` 只用于单元测试。
+会话锁仍是进程内锁，因此启动 Uvicorn 时不要配置多个 worker。
 
 ## Web 前端
 
@@ -162,5 +170,5 @@ env3.13/bin/python -m unittest discover -s tests -p 'test_*.py' -v
 
 ## 下一阶段
 
-下一步是将文件入库从线程池隔离的工具调用改造成独立 Workflow，使用
+下一步可增加短期记忆质量回归集和上下文 token 指标，并将文件入库从线程池隔离的工具调用改造成独立 Workflow，使用
 `task_id`、任务状态和进度管理，并为 Web 增加受控文件上传和任务状态接口。

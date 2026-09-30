@@ -45,6 +45,11 @@ class VectorStore(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def keyword_search(self, query: str, top_k: int) -> Sequence[Chunk]:
+        """按词法相关性搜索 Chunk。"""
+        raise NotImplementedError
+
+    @abstractmethod
     def list_documents(self) -> Sequence[DocumentSummary]:
         """列出已经写入的文档，不返回正文。"""
         raise NotImplementedError

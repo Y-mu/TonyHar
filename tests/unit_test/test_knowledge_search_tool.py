@@ -5,7 +5,7 @@ from tonyhar.tools.knowledge_search import KnowledgeSearchTool
 
 
 class FakeRetriever:
-    def retrieve(self, query: str, top_k: int):
+    def retrieve_hybrid(self, query: str, top_k: int):
         return [
             Chunk(
                 id="chunk-1",
@@ -16,11 +16,16 @@ class FakeRetriever:
         ][:top_k]
 
 
+class HybridRetriever:
+    def retrieve_hybrid(self, query: str, top_k: int):
+        return FakeRetriever().retrieve_hybrid(query, top_k)
+
+
 class KnowledgeSearchToolTest(unittest.IsolatedAsyncioTestCase):
     QUERY = '有资料称“允许ECU调校提升发动机性能，但需符合国六排放标准'
 
     def setUp(self):
-        self.tool = KnowledgeSearchTool(FakeRetriever())
+        self.tool = KnowledgeSearchTool(HybridRetriever())
 
     async def test_knowledge_search_tool_parameters(self):
         result = await self.tool.execute(query=self.QUERY, top_k=5)

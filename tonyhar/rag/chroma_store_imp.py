@@ -6,6 +6,8 @@ from tonyhar.model_config import (
 )
 
 import os
+import re
+import math
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
@@ -149,6 +151,66 @@ class ChromaStoreImp(VectorStore):
                 metadata=metadata,
             ))
         return chunks
+
+    @staticmethod
+    def _tokenize(text: str) -> list[str]:
+        """同时保留中文 unigram/bigram 与英文数字词，适合短查询。"""
+        normalized = text.lower().strip()
+        tokens = re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]", normalized)
+        chinese = [char for char in normalized if "\u4e00" <= char <= "\u9fff"]
+        tokens.extend("".join(chinese[index:index + 2]) for index in range(len(chinese) - 1))
+        return tokens
+
+    def keyword_search(self, query: str, top_k: int) -> Sequence[Chunk]:
+        """在 Chroma 已存正文上执行轻量 BM25 词法检索。"""
+        if top_k <= 0:
+            return []
+        result = self.collection.get(include=["metadatas", "documents"])
+        ids = result.get("ids") or []
+        documents = result.get("documents") or []
+        metadatas = result.get("metadatas") or []
+        query_tokens = self._tokenize(query)
+        if not query_tokens:
+            return []
+
+        rows: list[tuple[float, Chunk]] = []
+        doc_tokens = [self._tokenize(document or "") for document in documents]
+        avgdl = sum(len(tokens) for tokens in doc_tokens) / max(len(doc_tokens), 1)
+        document_frequency: dict[str, int] = {}
+        for tokens in doc_tokens:
+            for token in set(tokens):
+                document_frequency[token] = document_frequency.get(token, 0) + 1
+        total_docs = len(doc_tokens)
+        for chunk_id, text, metadata, tokens in zip(ids, documents, metadatas, doc_tokens):
+            metadata = metadata or {}
+            frequencies: dict[str, int] = {}
+            for token in tokens:
+                frequencies[token] = frequencies.get(token, 0) + 1
+            length = len(tokens)
+            score = 0.0
+            for token in query_tokens:
+                frequency = frequencies.get(token, 0)
+                if not frequency:
+                    continue
+                df = document_frequency.get(token, 0)
+                idf = math.log(1 + (total_docs - df + 0.5) / (df + 0.5))
+                score += idf * (frequency * 2.0) / (
+                    frequency + 1.5 * (0.25 + 0.75 * length / max(avgdl, 1.0))
+                )
+            if score <= 0:
+                continue
+            rows.append((score, Chunk(
+                id=chunk_id,
+                document_id=str(metadata.get("document_id", "")),
+                filename=str(metadata.get("filename", "")),
+                text=text or "",
+                chunk_index=int(metadata.get("chunk_index", 0)),
+                title=str(metadata.get("title", "")),
+                page=metadata.get("page"),
+                metadata=metadata,
+            )))
+        rows.sort(key=lambda row: (-row[0], row[1].id))
+        return [chunk for _, chunk in rows[:top_k]]
 
     def list_documents(self) -> Sequence[DocumentSummary]:
         """无需加载 embedding 模型即可读取现有文档目录。"""

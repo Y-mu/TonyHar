@@ -53,7 +53,7 @@ class KnowledgeSearchTool(BaseTool):
             raise ValueError("top_k 必须在 1 到 20 之间")
 
         chunks = await asyncio.to_thread(
-            self.retriever.retrieve,
+            self.retriever.retrieve_hybrid,
             query.strip(),
             top_k,
         )

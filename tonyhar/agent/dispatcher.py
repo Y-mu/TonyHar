@@ -47,19 +47,6 @@ class RunDispatcher:
     def dispatch(self, user_input: str) -> RunCommand:
         intent = self.recognizer.classify(user_input)
 
-        if intent.name == "spider_url":
-            url = self._extract_url(user_input)
-            return RunCommand(
-                kind=RunKind.DIRECT_TOOL,
-                route_name=intent.name,
-                confidence=intent.score,
-                tool_requests=(ToolRequest(
-                    name="spider_url",
-                    arguments={"url": url},
-                    tool_call_id=f"routed_spider_url_{uuid4().hex}",
-                ),),
-            )
-
         if intent.name == "knowledge_list":
             return RunCommand(
                 kind=RunKind.DIRECT_TOOL,
@@ -81,6 +68,20 @@ class RunDispatcher:
                     arguments={"message": user_input},
                     tool_call_id=f"routed_file_ingestion_{uuid4().hex}",
                 ),),
+            )
+
+        if intent.name == "spider_url":
+            url = self._extract_url(user_input)
+            return RunCommand(
+                kind=RunKind.RETRIEVAL_AGENT,
+                route_name=intent.name,
+                confidence=intent.score,
+                tool_requests=(ToolRequest(
+                    name="spider_url",
+                    arguments={"url": url},
+                    tool_call_id=f"routed_spider_url_{uuid4().hex}",
+                ),),
+                model_tool_names=("file_ingestion",),
             )
 
         if intent.name == "knowledge_query":

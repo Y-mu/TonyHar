@@ -14,7 +14,7 @@
                    → RawDocument
                    → HybridSplitter
                    → DocumentService
-                   → VectorStore
+                   → VectorStore（dense + BM25 混合检索）
                    → ChromaStoreImp
 ```
 
@@ -28,7 +28,7 @@
 | `PipelineContext` | 保存本次文本入库的正文、切片、进度和错误 |
 | `HybridSplitter` | 将 `RawDocument` 切分为稳定的 `Chunk` |
 | `DocumentService` | 规范 Chunk metadata，并通过存储端口写入 |
-| `VectorStore` | 定义向量存储端口 |
+| `VectorStore` | 定义 dense 与 keyword 检索端口 |
 | `ChromaStoreImp` | 实现 Chroma 存储适配 |
 
 `TextIngestionService` 的正式入口为：

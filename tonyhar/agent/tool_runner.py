@@ -11,8 +11,16 @@ from .runnables import AgentEvent, AgentEventType, AgentRunContext
 class ToolRunner:
     """通过 ToolManager 执行请求，并维护本轮消息和事件。"""
 
-    def __init__(self, tool_manager: ToolManager):
+    def __init__(
+        self,
+        tool_manager: ToolManager,
+        *,
+        max_total_model_output_chars: int = 12_000,
+    ) -> None:
+        if max_total_model_output_chars < 256:
+            raise ValueError("max_total_model_output_chars 不能小于 256")
         self.tool_manager = tool_manager
+        self.max_total_model_output_chars = max_total_model_output_chars
 
     async def stream(
         self,
@@ -41,10 +49,29 @@ class ToolRunner:
             tool_requests,
             deadline=context.deadline,
         )
+        remaining_chars = max(
+            0,
+            self.max_total_model_output_chars - context.tool_context_chars_used,
+        )
         for result in results:
+            tool = self.tool_manager.get(result.name)
+            per_tool_limit = (
+                tool.policy.max_model_output_chars
+                if tool is not None
+                else remaining_chars
+            )
+            if remaining_chars < 256:
+                model_content = (
+                    '{"truncated":true,"reason":"total_tool_output_limit"}'
+                )
+            else:
+                limit = min(per_tool_limit, remaining_chars)
+                model_content = result.content_for_model(limit)
+            remaining_chars = max(0, remaining_chars - len(model_content))
+            context.tool_context_chars_used += len(model_content)
             context.add_message(
                 "tool",
-                result.content,
+                model_content,
                 tool_call_id=result.tool_call_id,
             )
             yield build_event(
