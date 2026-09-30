@@ -10,7 +10,7 @@ from .agent_loop import AgentLoop
 from .dispatcher import RunCommand
 from .events import build_event
 from .runnables import AgentEvent, AgentEventType, AgentRunContext, AgentState
-from .tool_runner import ToolRunner
+from .tool_runner import ToolResultMode, ToolRunner
 
 
 class RunHandler(Protocol):
@@ -36,7 +36,7 @@ class DirectToolHandler:
         async for event in self.tool_runner.stream(
             context,
             command.tool_requests,
-            record_request=True,
+            result_mode=ToolResultMode.NONE,
         ):
             yield event
         context.pending_tools.clear()
@@ -101,7 +101,7 @@ class RetrievalAgentHandler:
         async for event in self.tool_runner.stream(
             context,
             command.tool_requests,
-            record_request=True,
+            result_mode=ToolResultMode.TRANSIENT_CONTEXT,
         ):
             yield event
         context.pending_tools.clear()

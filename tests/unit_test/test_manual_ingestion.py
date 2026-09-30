@@ -1,4 +1,3 @@
-import hashlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,7 +9,8 @@ from tonyhar.rag.parser import TxtParser
 from tonyhar.rag.splitter import HybridSplitter, SplitterConfig
 from tonyhar.rag.text_ingestion import TextIngestionService
 from tonyhar.rag.vector_store_base import Chunk, DocumentSummary, VectorStore
-from tonyhar.tools.file_ingestion import FileIngestionService
+from tonyhar.tools.document_ingestion import DocumentIngestionTool
+from tonyhar.tools.file_read import FileReadTool
 
 
 class MemoryVectorStore(VectorStore):
@@ -50,7 +50,7 @@ class MemoryVectorStore(VectorStore):
         return list(documents.values())
 
 
-class ManualIngestionTest(unittest.TestCase):
+class ManualIngestionTest(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def text_ingestion(store: MemoryVectorStore) -> TextIngestionService:
         return TextIngestionService(
@@ -77,12 +77,13 @@ class ManualIngestionTest(unittest.TestCase):
             "value": ["heading"],
         })
 
-    def test_file_reader_parses_file_and_returns_text(self):
+    async def test_file_read_tool_parses_file_and_returns_text(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             manual_path = Path(temp_dir) / "manual.txt"
             manual_path.write_bytes("发动机检查步骤。".encode("gb18030"))
 
-            text = FileTextReader(TxtParser()).read(manual_path)
+            tool = FileReadTool(FileTextReader(TxtParser()))
+            text = await tool.execute(path=str(manual_path))
 
             self.assertEqual(text, "发动机检查步骤。")
 
@@ -113,7 +114,7 @@ class ManualIngestionTest(unittest.TestCase):
                 "https://example.com/article",
             )
 
-    def test_file_ingestion_composes_reader_and_text_ingestion(self):
+    async def test_file_read_output_can_be_ingested_as_document(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             manual_path = Path(temp_dir) / "manual.txt"
             manual_path.write_text(
@@ -122,26 +123,45 @@ class ManualIngestionTest(unittest.TestCase):
             )
 
             store = MemoryVectorStore()
-            service = FileIngestionService(
-                reader=FileTextReader(TxtParser()),
-                text_ingestion=self.text_ingestion(store),
+            file_read = FileReadTool(FileTextReader(TxtParser()))
+            document_ingestion = DocumentIngestionTool(
+                self.text_ingestion(store)
             )
 
-            document_id = hashlib.sha1(
-                str(manual_path.resolve()).encode("utf-8")
-            ).hexdigest()
-            result = service.ingest(f"请导入 {manual_path}")
+            text = await file_read.execute(path=str(manual_path))
+            result = await document_ingestion.execute(
+                text=text,
+                filename=manual_path.name,
+                source_type="file",
+                source_uri=str(manual_path.resolve()),
+            )
 
             self.assertTrue(result["success"])
-            self.assertEqual(result["files"][0]["document_id"], document_id)
-            self.assertGreater(result["files"][0]["chunk_count"], 1)
+            self.assertGreater(result["chunk_count"], 1)
             for chunk in store.chunks.values():
-                self.assertEqual(chunk.document_id, document_id)
+                self.assertEqual(chunk.document_id, result["document_id"])
                 self.assertEqual(chunk.filename, "manual.txt")
                 self.assertTrue(chunk.text.strip())
-                self.assertEqual(chunk.metadata["document_id"], document_id)
+                self.assertEqual(
+                    chunk.metadata["document_id"],
+                    result["document_id"],
+                )
                 self.assertEqual(chunk.metadata["filename"], "manual.txt")
                 self.assertEqual(chunk.metadata["source_type"], "file")
+                self.assertEqual(
+                    chunk.metadata["source_uri"],
+                    str(manual_path.resolve()),
+                )
+
+    async def test_file_read_tool_rejects_directories_and_unsupported_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tool = FileReadTool(FileTextReader(TxtParser()))
+
+            with self.assertRaisesRegex(ValueError, "只支持"):
+                await tool.execute(path=str(Path(temp_dir) / "manual.pdf"))
+
+            with self.assertRaisesRegex(ValueError, "单个文件"):
+                await tool.execute(path=temp_dir)
 
 
 if __name__ == "__main__":

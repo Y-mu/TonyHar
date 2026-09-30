@@ -36,7 +36,7 @@ ROUTE_UTTERANCES: Mapping[str, tuple[str, ...]] = MappingProxyType({
         "请把 manual.txt 导入知识库",
         "导入本地文件 manual.txt",
         "解析并入库 /path/to/document.md",
-        "把这个路径下的文档加入知识库",
+        "把这个路径指向的文档加入知识库",
     ),
     # 知识库清单：查询已经入库的文件、文档数量或入库状态。
     "knowledge_list": (

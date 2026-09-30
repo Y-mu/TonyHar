@@ -169,7 +169,7 @@ class ChatService:
         context: AgentRunContext,
         initial_message_count: int,
     ) -> None:
-        new_messages = context.messages[initial_message_count:]
+        new_messages = context.persistent_messages_since(initial_message_count)
         if not new_messages:
             return
         status = {

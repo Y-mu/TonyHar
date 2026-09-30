@@ -140,7 +140,7 @@ class Session:
             metadata = {
                 key: deepcopy(value)
                 for key, value in raw.items()
-                if key not in {"role", "content", "reasoning_content"}
+                if key not in {"role", "content"}
             }
             self.messages.append(ConversationMessage(
                 id=uuid4().hex,

@@ -13,7 +13,7 @@ from .llm import (
     ModelResponseError,
 )
 from .runnables import AgentEvent, AgentEventType, AgentRunContext, AgentState
-from .tool_runner import ToolRunner
+from .tool_runner import ToolResultMode, ToolRunner
 
 
 class AgentLoop:
@@ -107,7 +107,7 @@ class AgentLoop:
             async for event in self.tool_runner.stream(
                 context,
                 context.pending_tools,
-                record_request=False,
+                result_mode=ToolResultMode.MODEL_PROTOCOL,
             ):
                 yield event
             context.pending_tools.clear()

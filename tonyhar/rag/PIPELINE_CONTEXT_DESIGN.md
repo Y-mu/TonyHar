@@ -6,11 +6,13 @@
 ## 总体流程
 
 ```text
-本地文件 → FileTextReader ─┐
-网页正文 → Web 抓取/清洗 ──┤
-其他来源 → str ────────────┤
-                            ↓
-                 TextIngestionService
+本地文件 → file_read → str ───────┐
+网页正文 → spider_url → str ──────┤
+其他来源 → str ───────────────────┤
+                                  ↓
+                     document_ingestion
+                                  ↓
+                     TextIngestionService
                    → RawDocument
                    → HybridSplitter
                    → DocumentService
@@ -24,6 +26,8 @@
 | --- | --- |
 | `DocumentParser` | 将一种文件编码或格式解析为正文 |
 | `FileTextReader` | 读取单个本地文件，调用 Parser 并返回 `str` |
+| `FileReadTool` | 对 Agent 暴露单文件读取能力，只返回解析后的正文 `str` |
+| `DocumentIngestionTool` | 接收正文和文档身份，调用文本入库服务 |
 | `TextIngestionService` | 接收正文与文档身份，切块、规范 metadata 并写库 |
 | `PipelineContext` | 保存本次文本入库的正文、切片、进度和错误 |
 | `HybridSplitter` | 将 `RawDocument` 切分为稳定的 `Chunk` |
@@ -50,14 +54,15 @@ context = text_ingestion.ingest(
 ## 本地文件入库
 
 ```text
-FileIngestionTool
-  → FileIngestionService 发现用户消息中的文件
-  → FileTextReader.read(path)
+AgentLoop
+  → file_read(path)
+  → str
+  → document_ingestion(text, filename, ...)
   → TextIngestionService.ingest(text, ...)
 ```
 
-`FileIngestionTool` 是完整的用户用例入口，但内部读取和入库可以分别测试、分别复用。
-支持的文件类型和目录扫描限制由 `FileIngestionService` 管理。
+`file_read` 只读取一个 `.txt` 或 `.md` 文件；`document_ingestion` 只处理已经取得的
+正文。旧的 `file_ingestion` 组合 Tool 和目录递归批量协议已经删除。
 
 ## Web 接入
 
@@ -72,12 +77,14 @@ context = text_ingestion.ingest(
 )
 ```
 
-网页正文不需要先写入临时文件，也不应该通过 LLM 从一个 Tool 转发给另一个 Tool。
+网页正文不需要先写入临时文件。`spider_url` 的结果进入 AgentLoop 后，可以作为
+`document_ingestion` 的 `text` 参数写入知识库。
 
 ## 依赖方向
 
 ```text
-tools → FileTextReader / TextIngestionService
+FileReadTool → FileTextReader
+DocumentIngestionTool → TextIngestionService
 TextIngestionService → HybridSplitter / DocumentService
 DocumentService → VectorStore ← ChromaStoreImp
 ```
@@ -99,5 +106,5 @@ RAG 模块不依赖 Tool、Agent 或 Web 层。组合根负责创建实例并注
 
 - 文件读取覆盖 UTF-8、UTF-8 BOM 和 GB18030 解码；
 - 文本入库测试不依赖文件系统，并覆盖 Web 来源 metadata；
-- 文件入库组合测试覆盖路径发现、读取、切块和写库；
+- Tool 组合测试覆盖单文件读取、正文传递、切块和写库；
 - VectorStore 使用内存实现测试，不加载 embedding 模型。

@@ -60,14 +60,10 @@ class RunDispatcher:
 
         if intent.name == "ingest":
             return RunCommand(
-                kind=RunKind.DIRECT_TOOL,
+                kind=RunKind.AGENT,
                 route_name=intent.name,
                 confidence=intent.score,
-                tool_requests=(ToolRequest(
-                    name="file_ingestion",
-                    arguments={"message": user_input},
-                    tool_call_id=f"routed_file_ingestion_{uuid4().hex}",
-                ),),
+                model_tool_names=("file_read", "document_ingestion"),
             )
 
         if intent.name == "spider_url":
@@ -81,7 +77,7 @@ class RunDispatcher:
                     arguments={"url": url},
                     tool_call_id=f"routed_spider_url_{uuid4().hex}",
                 ),),
-                model_tool_names=("file_ingestion",),
+                model_tool_names=("document_ingestion",),
             )
 
         if intent.name == "knowledge_query":

@@ -64,6 +64,11 @@ class AgentRunContext:
     pending_tools: list[ToolRequest] = field(default_factory=list)
     last_tool_results: list[Any] = field(default_factory=list)
     tool_context_chars_used: int = 0
+    _transient_message_ids: set[int] = field(
+        default_factory=set,
+        init=False,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         if not self.run_id.strip():
@@ -100,6 +105,28 @@ class AgentRunContext:
             "content": content,
             **metadata,
         })
+
+    def add_transient_message(
+        self,
+        role: str,
+        content: str,
+        **metadata: Any,
+    ) -> None:
+        """添加仅供本次模型运行使用、不进入会话日志的消息。"""
+        message = {
+            "role": role,
+            "content": content,
+            **metadata,
+        }
+        self.messages.append(message)
+        self._transient_message_ids.add(id(message))
+
+    def persistent_messages_since(self, start: int) -> list[dict[str, Any]]:
+        return [
+            message
+            for message in self.messages[start:]
+            if id(message) not in self._transient_message_ids
+        ]
 
 
 class AgentEventType(str, Enum):

@@ -37,6 +37,8 @@ ChatService
 - `ContextBuilder` 按模型 token 预算选择最近的完整轮次，不再按固定轮次数永久删除历史。
 - 较早的已完成轮次由 `LLMMemoryCompactor` 压缩为摘要和结构化任务状态；压缩失败时使用抽取式压缩。
 - 会话默认写入 `data/sessions.sqlite3`，进程重启后可以恢复。
+- 思考模式的 assistant 工具调用会把 `reasoning_content` 作为协议元数据随完整
+  会话日志持久化，并在后续模型上下文中原样恢复；该字段不进入前端响应或记忆摘要。
 - 失败或取消的轮次会保留在日志中，但不会进入后续模型上下文。
 - 同一会话串行执行，不同会话通过 `asyncio` 并发执行。
 
@@ -63,8 +65,11 @@ ChatService
 - `RunDispatcher` 为普通 Agent 请求声明本轮模型可见的只读 Tool；`AgentLoop`
   通过 `ToolManager.schemas(allowed_names)` 只发送允许的 Schema，并拒绝越权调用。
 - `spider_url` 由 `RunDispatcher` 确定性预执行：路由层从用户指令提取并校验
-  HTTP(S) URL，再生成 `ToolRequest`；抓取结果写入上下文后进入 `AgentLoop`，
-  并向模型提供 `file_ingestion` Tool Schema。
+  HTTP(S) URL，再生成 `ToolRequest`；抓取结果作为本轮临时参考上下文进入
+  `AgentLoop`，不伪装成模型产生的 assistant `tool_calls`，也不写入会话日志；
+  本轮同时向模型提供 `document_ingestion` Tool Schema。
+- 本地文档入库由两个 Tool 串联完成：`file_read` 读取并解析单个 `.txt` 或 `.md`
+  文件、返回正文字符串，`document_ingestion` 接收正文和文档身份后完成切块与写库。
 - 所有 Tool 都只通过 `ToolManager.execute()` 执行模型或 Handler 产生的 `ToolRequest`。
 - Tool 的完整结构化结果继续用于业务和展示；写入模型上下文的内容受单工具和单轮总量限制，避免大结果撑爆上下文。
 
@@ -75,19 +80,22 @@ ChatService
 ### RAG
 
 ```text
-本地文件 → FileTextReader ─┐
-网页正文或其他字符串 ──────┤
-                           ↓
-                  TextIngestionService
+本地文件 → file_read → str ───────────┐
+网页正文或其他字符串 → str ───────────┤
+                                      ↓
+                         document_ingestion
+                                      ↓
+                         TextIngestionService
   → HybridSplitter
   → DocumentService
   → VectorStore
   → ChromaDB
 ```
 
-文件读取/解析与文本切块/入库是两个独立步骤。`TextIngestionService` 只接收正文字符串和
-文档 metadata，因此本地文件与网页抓取结果可以复用同一条入库流水线。RAG 服务通过
-`VectorStore` 抽象隔离 Chroma，工具只接收由组合根注入的服务，不自行创建基础设施。
+`file_read` 和 `document_ingestion` 是两个独立 Tool；旧的 `file_ingestion` Tool
+已经删除，不保留兼容入口。`TextIngestionService` 只接收正文字符串和文档 metadata，
+因此本地文件与网页抓取结果可以复用同一条入库流水线。RAG 服务通过 `VectorStore`
+抽象隔离 Chroma，工具只接收由组合根注入的服务，不自行创建基础设施。
 
 ## 本地运行
 

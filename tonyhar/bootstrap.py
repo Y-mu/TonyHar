@@ -29,7 +29,8 @@ from tonyhar.rag.splitter import HybridSplitter, SplitterConfig
 from tonyhar.rag.text_ingestion import TextIngestionService
 from tonyhar.tooling import ToolManager
 from tonyhar.tools.calculator import CalculatorTool
-from tonyhar.tools.file_ingestion import FileIngestionService, FileIngestionTool
+from tonyhar.tools.document_ingestion import DocumentIngestionTool
+from tonyhar.tools.file_read import FileReadTool
 from tonyhar.tools.knowledge_list import KnowledgeListTool
 from tonyhar.tools.knowledge_search import KnowledgeSearchTool
 from tonyhar.tools.spider_url import GetUrlTool
@@ -39,7 +40,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 SYSTEM_PROMPT = (
     "你是一个会使用工具的助手。需要计算时调用 calculator。"
-    "如果系统提示文件已入库，请向用户说明入库结果。"
+    "导入本地文件时，先调用 file_read 获取正文，再把完整正文原样传给 "
+    "document_ingestion；导入网页正文时，把抓取结果传给 document_ingestion。"
+    "document_ingestion 成功后，向用户说明入库结果。"
     "回答知识库问题时，只能依据 knowledge_search 返回的片段，"
     "没有检索到相关内容时应明确说明。"
 )
@@ -61,15 +64,13 @@ def build_agent(llm: BaseLLM | None = None) -> Agent:
         splitter=splitter,
         document_service=document_service,
     )
-    file_ingestion = FileIngestionService(
-        reader=FileTextReader(TxtParser()),
-        text_ingestion=text_ingestion,
-    )
+    file_reader = FileTextReader(TxtParser())
 
     tool_manager = ToolManager(
         providers=[
             CalculatorTool,
-            lambda: FileIngestionTool(file_ingestion),
+            lambda: FileReadTool(file_reader),
+            lambda: DocumentIngestionTool(text_ingestion),
             lambda: KnowledgeListTool(document_service),
             lambda: KnowledgeSearchTool(retriever),
             GetUrlTool,

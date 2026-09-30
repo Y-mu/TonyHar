@@ -31,6 +31,11 @@ class SpiderUrlRecognizer:
         return IntentResult(name="spider_url", score=0.9)
 
 
+class IngestRecognizer:
+    def classify(self, text):
+        return IntentResult(name="ingest", score=0.9)
+
+
 class ChatRecognizer:
     def classify(self, text):
         return IntentResult(name="chat", score=0.9)
@@ -77,18 +82,43 @@ class RecordingSpiderTool(BaseTool):
         return data
 
 
-class RecordingFileIngestionTool(BaseTool):
-    name = "file_ingestion"
-    description = "test file ingestion"
+class RecordingFileReadTool(BaseTool):
+    name = "file_read"
+    description = "test file read"
     parameters = {
         "type": "object",
-        "properties": {"message": {"type": "string"}},
-        "required": ["message"],
+        "properties": {"path": {"type": "string"}},
+        "required": ["path"],
         "additionalProperties": False,
     }
 
-    async def execute(self, message):
-        return {"message": message}
+    def __init__(self):
+        self.paths = []
+
+    async def execute(self, path):
+        self.paths.append(path)
+        return "文件正文"
+
+
+class RecordingDocumentIngestionTool(BaseTool):
+    name = "document_ingestion"
+    description = "test document ingestion"
+    parameters = {
+        "type": "object",
+        "properties": {
+            "text": {"type": "string"},
+            "filename": {"type": "string"},
+        },
+        "required": ["text", "filename"],
+        "additionalProperties": False,
+    }
+
+    def __init__(self):
+        self.calls = []
+
+    async def execute(self, text, filename):
+        self.calls.append((text, filename))
+        return {"text": text, "filename": filename}
 
 
 class TestLLM(BaseLLM):
@@ -104,6 +134,12 @@ class RecordingLLM(TestLLM):
     async def stream(self, messages, tools, *, deadline):
         self.messages = list(messages)
         self.tools = list(tools)
+        for message in self.messages:
+            if message["role"] == "assistant" and message.get("tool_calls"):
+                if "reasoning_content" not in message:
+                    raise AssertionError(
+                        "assistant tool_calls 缺少 reasoning_content"
+                    )
         yield LLMCompleted(
             response=LLMResponse(content="根据检索证据作答")
         )
@@ -147,14 +183,48 @@ class ThinkingToolLLM(TestLLM):
         yield LLMCompleted(response=LLMResponse(content="工具调用完成"))
 
 
+class IngestionChainLLM(TestLLM):
+    def __init__(self):
+        self.calls = []
+
+    async def stream(self, messages, tools, *, deadline):
+        self.calls.append({
+            "messages": list(messages),
+            "tools": list(tools),
+        })
+        if len(self.calls) == 1:
+            yield LLMCompleted(
+                response=LLMResponse(tool_calls=[ToolRequest(
+                    tool_call_id="read-1",
+                    name="file_read",
+                    arguments={"path": "manual.md"},
+                )])
+            )
+            return
+        if len(self.calls) == 2:
+            text = json.loads(messages[-1]["content"])
+            yield LLMCompleted(
+                response=LLMResponse(tool_calls=[ToolRequest(
+                    tool_call_id="ingest-1",
+                    name="document_ingestion",
+                    arguments={
+                        "text": text,
+                        "filename": "manual.md",
+                    },
+                )])
+            )
+            return
+        yield LLMCompleted(response=LLMResponse(content="文档已入库"))
+
+
 class UnauthorizedToolLLM(TestLLM):
     async def stream(self, messages, tools, *, deadline):
         yield LLMCompleted(
             response=LLMResponse(
                 tool_calls=[ToolRequest(
                     tool_call_id="call-forbidden",
-                    name="file_ingestion",
-                    arguments={"message": "导入文件"},
+                    name="document_ingestion",
+                    arguments={"text": "正文", "filename": "manual.md"},
                 )],
             )
         )
@@ -182,10 +252,50 @@ class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):
             command.tool_requests[0].arguments,
             {"url": "https://example.com/article"},
         )
-        self.assertEqual(command.model_tool_names, ("file_ingestion",))
+        self.assertEqual(command.model_tool_names, ("document_ingestion",))
 
         with self.assertRaisesRegex(ValueError, "需要提供"):
             dispatcher.dispatch("请抓取这个网页")
+
+    def test_ingest_route_exposes_read_and_document_ingestion_tools(self):
+        command = RunDispatcher(IngestRecognizer()).dispatch(
+            "请把 manual.md 导入知识库"
+        )
+
+        self.assertIs(command.kind, RunKind.AGENT)
+        self.assertEqual(command.tool_requests, ())
+        self.assertEqual(
+            command.model_tool_names,
+            ("file_read", "document_ingestion"),
+        )
+
+    async def test_ingest_agent_reads_text_then_ingests_document(self):
+        file_read = RecordingFileReadTool()
+        document_ingestion = RecordingDocumentIngestionTool()
+        llm = IngestionChainLLM()
+        agent = Agent(
+            llm=llm,
+            tool_manager=ToolManager([
+                lambda: file_read,
+                lambda: document_ingestion,
+            ]),
+            run_dispatcher=RunDispatcher(IngestRecognizer()),
+        )
+
+        result = await agent.invoke(self.context("请把 manual.md 导入知识库"))
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.answer, "文档已入库")
+        self.assertEqual(file_read.paths, ["manual.md"])
+        self.assertEqual(
+            document_ingestion.calls,
+            [("文件正文", "manual.md")],
+        )
+        for call in llm.calls:
+            self.assertEqual(
+                [schema["function"]["name"] for schema in call["tools"]],
+                ["file_read", "document_ingestion"],
+            )
 
     async def test_dispatcher_returns_tool_request_without_executing_it(self):
         tool_manager = ToolManager([RecordingListTool])
@@ -224,10 +334,21 @@ class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):
             [schema["function"]["name"] for schema in llm.tools],
             [],
         )
-        self.assertEqual(llm.messages[-2]["role"], "assistant")
-        self.assertEqual(llm.messages[-1]["role"], "tool")
-        result = json.loads(llm.messages[-1]["content"])
+        self.assertEqual(llm.messages[-1]["role"], "user")
+        self.assertNotIn("tool_calls", llm.messages[-1])
+        self.assertIn("<tool_context>", llm.messages[-1]["content"])
+        payload = llm.messages[-1]["content"].split(
+            "<tool_context>", 1
+        )[1].split("</tool_context>", 1)[0]
+        result = json.loads(json.loads(payload)["content"])
         self.assertEqual(result["matches"][0]["text"], "检索证据")
+        self.assertEqual(
+            [
+                message["role"]
+                for message in context.persistent_messages_since(0)
+            ],
+            ["user", "assistant"],
+        )
 
     async def test_runtime_error_returns_structured_failed_result(self):
         agent = Agent(
@@ -267,12 +388,13 @@ class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_spider_url_route_fetches_then_enters_agent_loop(self):
         spider = RecordingSpiderTool()
+        document_ingestion = RecordingDocumentIngestionTool()
         llm = RecordingLLM()
         agent = Agent(
             llm=llm,
             tool_manager=ToolManager([
                 lambda: spider,
-                RecordingFileIngestionTool,
+                lambda: document_ingestion,
             ]),
             run_dispatcher=RunDispatcher(SpiderUrlRecognizer()),
         )
@@ -285,13 +407,24 @@ class AgentKnowledgeSearchTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(spider.urls, ["https://example.com/article"])
         self.assertEqual(
             [schema["function"]["name"] for schema in llm.tools],
-            ["file_ingestion"],
+            ["document_ingestion"],
         )
-        self.assertEqual(llm.messages[-2]["role"], "assistant")
-        self.assertEqual(llm.messages[-1]["role"], "tool")
+        self.assertEqual(llm.messages[-1]["role"], "user")
+        self.assertNotIn("tool_calls", llm.messages[-1])
+        self.assertIn("<tool_context>", llm.messages[-1]["content"])
+        payload = llm.messages[-1]["content"].split(
+            "<tool_context>", 1
+        )[1].split("</tool_context>", 1)[0]
         self.assertEqual(
-            json.loads(llm.messages[-1]["content"]),
+            json.loads(json.loads(payload)["content"]),
             "# 抓取结果\n\n网页正文",
+        )
+        self.assertEqual(
+            [
+                message["role"]
+                for message in context.persistent_messages_since(0)
+            ],
+            ["user", "assistant"],
         )
         self.assertIs(context.state, AgentState.COMPLETED)
 

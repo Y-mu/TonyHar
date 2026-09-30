@@ -209,6 +209,60 @@ class ShortTermMemoryTest(unittest.IsolatedAsyncioTestCase):
                 ["记住这一点", "已经记住"],
             )
 
+    async def test_sqlite_store_restores_reasoning_for_tool_call_replay(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "sessions.sqlite3"
+            store = SQLiteSessionStore(path)
+            session = Session.create("thinking-session")
+            session.append_turn(
+                [
+                    {"role": "user", "content": "查询资料"},
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "reasoning_content": "需要先调用检索工具",
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {
+                                    "name": "knowledge_search",
+                                    "arguments": '{"query":"资料"}',
+                                },
+                            }
+                        ],
+                    },
+                    {
+                        "role": "tool",
+                        "content": "检索结果",
+                        "tool_call_id": "call-1",
+                    },
+                    {"role": "assistant", "content": "最终回答"},
+                ],
+                status=TurnStatus.COMPLETED,
+            )
+            await store.create(session)
+            await store.aclose()
+
+            reopened = SQLiteSessionStore(path)
+            loaded = await reopened.get("thinking-session")
+            await reopened.aclose()
+
+            self.assertIsNotNone(loaded)
+            assert loaded is not None
+            messages = ContextBuilder(self.counter).build(loaded, "继续")
+            tool_call_message = next(
+                message for message in messages if "tool_calls" in message
+            )
+            self.assertEqual(
+                tool_call_message["reasoning_content"],
+                "需要先调用检索工具",
+            )
+            self.assertEqual(
+                tool_call_message["tool_calls"][0]["id"],
+                "call-1",
+            )
+
     async def test_sqlite_store_rejects_stale_revision(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             store = SQLiteSessionStore(Path(temp_dir) / "sessions.sqlite3")
